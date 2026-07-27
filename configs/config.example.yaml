@@ -1,0 +1,66 @@
+# Copy to configs/config.yaml and adjust. config.yaml is gitignored.
+
+server:
+  addr: ":8080"
+  read_timeout: 15s
+
+agent:
+  # Hard stops, not warnings. An investigation that blows either budget is
+  # returned as-is with whatever it found and an explicit unknowns list.
+  max_tool_calls: 15
+  max_cost_usd: 0.25
+  max_duration: 120s
+
+llm:
+  provider: anthropic
+  # Cheap model drives tool selection, expensive model writes the final
+  # synthesis. Validate the split against the benchmark before trusting it.
+  planner_model: claude-haiku-4-5
+  synthesis_model: claude-sonnet-5
+  api_key_env: ANTHROPIC_API_KEY
+
+clusters:
+  - name: prod-gke-asia-southeast2
+    kubeconfig_context: gke_prod_asia-southeast2
+    namespaces:
+      # Empty allow list means all namespaces except those denied.
+      allow: []
+      deny:
+        - kube-system
+        - kube-node-lease
+
+observability:
+  prometheus:
+    url: http://prometheus.monitoring.svc:9090
+  alertmanager:
+    url: http://alertmanager.monitoring.svc:9093
+  logs:
+    backend: signoz
+    url: http://signoz-query.observability.svc:8080
+
+storage:
+  postgres:
+    dsn_env: POSTGRES_DSN
+    # Investigation traces contain cluster state. Keep the window short.
+    retention_days: 30
+
+redaction:
+  # Applied to every tool output before it enters the model context.
+  enabled: true
+  extra_patterns:
+    - "(?i)authorization:\\s*bearer\\s+\\S+"
+    - "(?i)(password|passwd|secret|token|apikey|api_key)\\s*[:=]\\s*\\S+"
+
+slack:
+  enabled: false
+  channel: "#incidents"
+  bot_token_env: SLACK_BOT_TOKEN
+
+remediation:
+  # Phase 2. Leave false until the approval flow and audit log are in place.
+  enabled: false
+  allowed_actions:
+    - restart_deployment
+    - scale_deployment
+    - delete_pod
+    - cordon_node

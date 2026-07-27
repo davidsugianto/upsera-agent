@@ -1,0 +1,95 @@
+# Read-only access for the triage agent.
+#
+# Deliberate omissions, do not "fix" these:
+#
+#   * secrets are NOT granted. There is no metadata-only read in the
+#     Kubernetes API: `get` or `list` on a Secret returns the data payload.
+#     The agent infers a missing or malformed Secret from Pod status and
+#     Events instead, which is enough to diagnose CreateContainerConfigError
+#     and ImagePullBackOff without ever holding credential material.
+#
+#   * no create, update, patch, delete, or exec verbs. Phase 2 remediation
+#     uses a SEPARATE ServiceAccount and Role, bound only after the approval
+#     flow exists. Do not add mutating verbs here.
+#
+#   * pods/exec and pods/portforward are excluded. Exec into a workload is a
+#     data exfiltration path and is not required for any Phase 0 diagnosis.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: k8s-triage-agent
+  namespace: platform-agents
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: k8s-triage-agent-readonly
+rules:
+  - apiGroups: [""]
+    resources:
+      - pods
+      - pods/log
+      - pods/status
+      - nodes
+      - nodes/status
+      - services
+      - endpoints
+      - events
+      - namespaces
+      - persistentvolumeclaims
+      - persistentvolumes
+      - configmaps
+      - replicationcontrollers
+      - resourcequotas
+      - limitranges
+      - serviceaccounts
+    verbs: ["get", "list", "watch"]
+
+  - apiGroups: ["apps"]
+    resources: [deployments, replicasets, statefulsets, daemonsets]
+    verbs: ["get", "list", "watch"]
+
+  - apiGroups: ["batch"]
+    resources: [jobs, cronjobs]
+    verbs: ["get", "list", "watch"]
+
+  - apiGroups: ["autoscaling"]
+    resources: [horizontalpodautoscalers]
+    verbs: ["get", "list", "watch"]
+
+  - apiGroups: ["policy"]
+    resources: [poddisruptionbudgets]
+    verbs: ["get", "list", "watch"]
+
+  - apiGroups: ["networking.k8s.io"]
+    resources: [ingresses, networkpolicies]
+    verbs: ["get", "list", "watch"]
+
+  - apiGroups: ["discovery.k8s.io"]
+    resources: [endpointslices]
+    verbs: ["get", "list", "watch"]
+
+  - apiGroups: ["storage.k8s.io"]
+    resources: [storageclasses, volumeattachments]
+    verbs: ["get", "list", "watch"]
+
+  - apiGroups: ["metrics.k8s.io"]
+    resources: [pods, nodes]
+    verbs: ["get", "list"]
+
+  - apiGroups: ["gateway.networking.k8s.io"]
+    resources: [gateways, httproutes]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: k8s-triage-agent-readonly
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: k8s-triage-agent-readonly
+subjects:
+  - kind: ServiceAccount
+    name: k8s-triage-agent
+    namespace: platform-agents

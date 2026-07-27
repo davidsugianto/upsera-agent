@@ -1,0 +1,60 @@
+# NOTE: the agent should run OUTSIDE the cluster it diagnoses, or in a
+# dedicated management cluster. An agent that shares a failure domain with its
+# subject is unavailable during exactly the outages it exists for. This
+# manifest is for the management-cluster deployment.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: k8s-triage-agent
+  namespace: platform-agents
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: k8s-triage-agent
+  template:
+    metadata:
+      labels:
+        app: k8s-triage-agent
+    spec:
+      serviceAccountName: k8s-triage-agent
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: agent
+          image: ghcr.io/davidsugianto/k8s-triage-agent:dev
+          args: ["--config", "/etc/agent/config.yaml"]
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: k8s-triage-agent-llm
+                  key: api-key
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+          volumeMounts:
+            - name: config
+              mountPath: /etc/agent
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: k8s-triage-agent-config

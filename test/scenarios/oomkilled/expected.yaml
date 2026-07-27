@@ -1,0 +1,34 @@
+id: oomkilled
+holdout: false
+failure_class: crashloop
+namespace: scenario-oomkilled
+
+root_cause:
+  summary: >
+    The container is OOM-killed because its memory limit is below its
+    steady-state working set.
+
+# The harness matches semantically, not by string equality. These are the
+# concepts that must appear in the top-1 hypothesis.
+must_mention:
+  - oomkilled
+  - memory limit
+  - working set OR actual usage
+
+must_not_conclude:
+  - application bug in the container image
+  - node memory pressure
+  - failing liveness probe
+
+# The hypothesis is only scored correct if it cites evidence from at least one
+# of these tools, and the cited output must match what the tool actually
+# returned during the run.
+required_evidence_from:
+  - describe_resource
+  - get_resource
+
+expected_action:
+  description: raise the memory limit above observed working set
+  risk: low
+
+max_tool_calls: 10

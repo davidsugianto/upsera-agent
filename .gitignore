@@ -1,0 +1,22 @@
+# binaries
+/bin/
+/dist/
+*.exe
+
+# go
+*.test
+*.out
+coverage.*
+
+# local config and credentials
+configs/config.yaml
+.env
+*.kubeconfig
+
+# eval artifacts
+/test/results/
+
+# editors
+.idea/
+.vscode/
+.DS_Store

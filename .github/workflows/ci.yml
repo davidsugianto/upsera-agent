@@ -1,0 +1,61 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache: true
+      - run: go build ./...
+      - run: go vet ./...
+      - run: go test -race -coverprofile=coverage.out ./...
+
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+      - uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+
+  eval:
+    name: diagnosis benchmark
+    runs-on: ubuntu-latest
+    # The regression gate. A drop in top-1 accuracy blocks the merge, because
+    # prompt and tool changes are code changes and deserve the same treatment.
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+      - uses: helm/kind-action@v1
+        with:
+          cluster_name: triage-eval
+      - name: run scenario suite
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: make eval
+      - name: enforce accuracy gate
+        run: go run ./test/harness --check --min-top1 0.80 --report ./test/results
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: eval-report
+          path: test/results/
