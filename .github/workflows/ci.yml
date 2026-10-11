@@ -8,44 +8,112 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
-  build:
+  go:
     name: build and test
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          go-version: "1.24"
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
           cache: true
       - run: go build ./...
       - run: go vet ./...
-      - run: go test -race -coverprofile=coverage.out ./...
+      - run: go test -race ./...
 
   lint:
     name: lint
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          go-version: "1.24"
-      - uses: golangci/golangci-lint-action@v6
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          version: latest
+          go-version-file: go.mod
+      # .golangci.yml is v2 format, so pin a v2 golangci-lint.
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.14.0
+
+  helm:
+    name: helm lint and template
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+      - run: helm lint deploy/helm/k8s-triage-agent
+      - run: helm template k8s-triage-agent deploy/helm/k8s-triage-agent
+
+  infra:
+    name: opentofu validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+      # fmt, init -backend=false and validate only. Never plan or apply in CI.
+      - run: tofu fmt -check -recursive infra/gke-lab
+      - run: tofu -chdir=infra/gke-lab init -backend=false -input=false
+      - run: tofu -chdir=infra/gke-lab validate
+
+  image:
+    name: image build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Build only; nothing is pushed.
+      - run: docker build -t upsera-agent:ci .
+
+  telemetry:
+    name: telemetry reaches a collector
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      # Local collector with a debug exporter: no Datadog keys involved.
+      - run: make verify-telemetry
 
   eval:
     name: diagnosis benchmark
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     # The regression gate. A drop in top-1 accuracy blocks the merge, because
     # prompt and tool changes are code changes and deserve the same treatment.
-    if: github.event_name == 'pull_request'
+    # Off until the harness exists: it needs test/harness and the
+    # ANTHROPIC_API_KEY secret. Enable by setting the repository variable
+    # RUN_EVAL=true once both are in place.
+    if: github.event_name == 'pull_request' && vars.RUN_EVAL == 'true'
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          go-version: "1.24"
-      - uses: helm/kind-action@v1
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
         with:
           cluster_name: triage-eval
       - name: run scenario suite
@@ -54,7 +122,7 @@ jobs:
         run: make eval
       - name: enforce accuracy gate
         run: go run ./test/harness --check --min-top1 0.80 --report ./test/results
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: eval-report

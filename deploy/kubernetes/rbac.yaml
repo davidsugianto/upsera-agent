@@ -1,4 +1,22 @@
-# Read-only access for the triage agent.
+# Read-only access for the triage agent, applied in each TARGET cluster.
+#
+# The agent runs outside the clusters it diagnoses (ADR 0002), so this file is
+# NOT applied next to the agent. Apply it in every cluster the agent is allowed
+# to investigate. The ClusterRole is bound to the identity the off-cluster agent
+# authenticates as:
+#
+#   * dev (kind `upsera-lab`): the ServiceAccount below. Mint a short-lived
+#     token with `kubectl --context kind-upsera-lab -n platform-agents create
+#     token k8s-triage-agent` and put it in the agent's kubeconfig. No
+#     long-lived token Secret is created.
+#
+#   * GKE: a Google identity via Workload Identity. GKE authenticates the
+#     caller as the Google service account's email, so the binding subject is a
+#     `User`. Replace PROJECT_ID (and the account name if yours differs) before
+#     applying.
+#
+# All of it lives in the `platform-agents` namespace where a namespace is needed
+# (the ServiceAccount), so it is easy to find and audit.
 #
 # Deliberate omissions, do not "fix" these:
 #
@@ -8,17 +26,37 @@
 #     Events instead, which is enough to diagnose CreateContainerConfigError
 #     and ImagePullBackOff without ever holding credential material.
 #
-#   * no create, update, patch, delete, or exec verbs. Phase 2 remediation
-#     uses a SEPARATE ServiceAccount and Role, bound only after the approval
-#     flow exists. Do not add mutating verbs here.
+#   * configmaps are NOT granted. They routinely carry connection strings and
+#     tokens, and they are returned in full. A missing or malformed ConfigMap
+#     shows up in Pod status and Events (CreateContainerConfigError), which is
+#     enough to diagnose it. serviceaccounts, persistentvolumes,
+#     replicationcontrollers, storageclasses, volumeattachments and Gateway API
+#     resources are left out too: they are outside the Kubernetes model the PRD
+#     requires. The role is compared with an exact allow-list (allowedReads in
+#     rbac_test.go), so any new grant fails the test until it is added there with
+#     a reason, in the same commit.
 #
-#   * pods/exec and pods/portforward are excluded. Exec into a workload is a
-#     data exfiltration path and is not required for any Phase 0 diagnosis.
+#   * no create, update, patch, delete, or exec verbs. Remediation uses a
+#     SEPARATE identity and Role, bound only after the approval flow exists.
+#     Do not add mutating verbs here.
+#
+#   * pods/exec, pods/portforward and pods/attach are excluded. Exec into a
+#     workload is a data exfiltration path and is not required for any
+#     read-only diagnosis.
+#
+# rbac_test.go in this directory enforces these properties.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: platform-agents
+---
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: k8s-triage-agent
   namespace: platform-agents
+  # Do not add secrets or imagePullSecrets here; tokens are minted on demand.
+automountServiceAccountToken: false
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -37,12 +75,8 @@ rules:
       - events
       - namespaces
       - persistentvolumeclaims
-      - persistentvolumes
-      - configmaps
-      - replicationcontrollers
       - resourcequotas
       - limitranges
-      - serviceaccounts
     verbs: ["get", "list", "watch"]
 
   - apiGroups: ["apps"]
@@ -69,17 +103,9 @@ rules:
     resources: [endpointslices]
     verbs: ["get", "list", "watch"]
 
-  - apiGroups: ["storage.k8s.io"]
-    resources: [storageclasses, volumeattachments]
-    verbs: ["get", "list", "watch"]
-
   - apiGroups: ["metrics.k8s.io"]
     resources: [pods, nodes]
     verbs: ["get", "list"]
-
-  - apiGroups: ["gateway.networking.k8s.io"]
-    resources: [gateways, httproutes]
-    verbs: ["get", "list", "watch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -90,6 +116,12 @@ roleRef:
   kind: ClusterRole
   name: k8s-triage-agent-readonly
 subjects:
+  # Dev: token minted for this ServiceAccount.
   - kind: ServiceAccount
     name: k8s-triage-agent
     namespace: platform-agents
+  # GKE: Google service account reached through Workload Identity.
+  # Replace PROJECT_ID. Remove this subject in clusters that do not use it.
+  - apiGroup: rbac.authorization.k8s.io
+    kind: User
+    name: k8s-triage-agent@PROJECT_ID.iam.gserviceaccount.com

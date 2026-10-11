@@ -1,0 +1,28 @@
+# OpenTelemetry Collector (contrib) config for the dev loop.
+# Receives OTLP gRPC from agent-server and forwards traces and metrics to Datadog.
+# DD_API_KEY and DD_SITE come from the container environment, never from this file.
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+processors:
+  batch: {}
+
+exporters:
+  datadog:
+    api:
+      key: ${env:DD_API_KEY}
+      site: ${env:DD_SITE}
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [datadog]
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [datadog]

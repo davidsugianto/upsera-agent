@@ -1,0 +1,21 @@
+# Keep local credentials, state and build output out of the build context so
+# they cannot end up in any image layer or build cache.
+.git
+.github
+.env
+.env.*
+*.kubeconfig
+bin/
+dist/
+coverage.*
+test/results/
+
+# Not needed to build the binary.
+docs/
+infra/
+deploy/
+hack/
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars

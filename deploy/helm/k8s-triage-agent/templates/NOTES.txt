@@ -1,0 +1,27 @@
+k8s-triage-agent {{ .Chart.AppVersion }} installed as "{{ include "k8s-triage-agent.fullname" . }}" in namespace {{ .Release.Namespace }}.
+
+This is the management-side deployment. The agent runs outside the clusters it
+diagnoses and reaches them remotely, so each target cluster also needs the
+read-only RBAC from deploy/kubernetes/rbac.yaml bound to the identity this
+agent uses (kubeconfig token in dev, Workload Identity in GKE).
+
+{{- if not .Values.kubeconfigSecret }}
+
+No kubeconfigSecret is set: target cluster access must come from Workload
+Identity / ambient credentials.
+{{- end }}
+{{- if not .Values.otel.endpoint }}
+
+otel.endpoint is empty: agent telemetry is disabled.
+{{- end }}
+{{- range $k, $s := .Values.existingSecrets }}
+{{- if not $s.name }}
+
+existingSecrets.{{ $k }}.name is empty: {{ $s.envName }} is not set in the pod.
+{{- end }}
+{{- end }}
+
+Check the pod:
+  kubectl -n {{ .Release.Namespace }} get pods -l app.kubernetes.io/instance={{ .Release.Name }}
+  kubectl -n {{ .Release.Namespace }} port-forward deploy/{{ include "k8s-triage-agent.fullname" . }} 8080:8080
+  curl localhost:8080/readyz

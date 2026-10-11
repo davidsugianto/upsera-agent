@@ -1,0 +1,12 @@
+apiVersion: v2
+name: k8s-triage-agent
+description: >-
+  Management-side deployment of the k8s-triage-agent. The agent runs outside the
+  clusters it diagnoses (ADR 0002) and reaches target clusters remotely.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - kubernetes
+  - triage
+  - datadog

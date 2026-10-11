@@ -1,5 +1,6 @@
 # binaries
 /bin/
+bin/
 /dist/
 *.exe
 
@@ -7,14 +8,25 @@
 *.test
 *.out
 coverage.*
+coverage.out
 
 # local config and credentials
 configs/config.yaml
 .env
+.env.*
 *.kubeconfig
+
+# OpenTofu / Terraform state and local data (never commit state or real tfvars)
+*.tfstate
+*.tfstate.*
+.terraform/
+crash.log
+*.tfvars
+!*.tfvars.example
 
 # eval artifacts
 /test/results/
+test/results/
 
 # editors
 .idea/
