@@ -29,8 +29,8 @@ type Tool interface {
 
 // Registry holds the tools available to a given investigation. Scoping is
 // per-investigation rather than global so that namespace allowlists and the
-// Phase 2 remediation gate can be enforced at construction time rather than
-// checked at call time.
+// remediation gate can be enforced at construction time rather than checked at
+// call time.
 type Registry struct {
 	tools map[string]Tool
 }

@@ -1,21 +1,37 @@
+version: "2"
+
 run:
   timeout: 5m
 
 linters:
+  # v2 default set is "standard" (errcheck, govet, ineffassign, staticcheck,
+  # unused). gosimple is folded into staticcheck in v2.
+  default: standard
   enable:
-    - errcheck
-    - govet
-    - staticcheck
-    - unused
-    - gosimple
-    - ineffassign
-    - gosec
-    - revive
     - bodyclose
     - errorlint
+    - gosec
+    - revive
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      - linters:
+          - gosec
+        path: _test\.go
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
 
-issues:
-  exclude-rules:
-    - path: _test\.go
-      linters:
-        - gosec
+formatters:
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$

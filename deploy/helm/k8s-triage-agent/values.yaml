@@ -1,0 +1,121 @@
+# Values for the management-side k8s-triage-agent deployment.
+#
+# This chart does NOT create Secrets. Credentials come from Secrets that already
+# exist in the release namespace (see existingSecrets and kubeconfigSecret).
+# The read-only RBAC for target clusters lives in deploy/kubernetes/rbac.yaml,
+# not here: it is applied in each target cluster, not next to the agent.
+
+image:
+  repository: ghcr.io/davidsugianto/upsera-agent
+  # Defaults to the chart appVersion when empty.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+replicaCount: 1
+
+serviceAccount:
+  create: true
+  # Defaults to the release fullname when empty.
+  name: ""
+  # The agent talks to target clusters through a kubeconfig or Workload
+  # Identity, not through the management cluster API, so the token is not
+  # mounted. Set to true only if something in the pod needs it.
+  automountServiceAccountToken: false
+  # e.g. iam.gke.io/gcp-service-account: agent@PROJECT_ID.iam.gserviceaccount.com
+  annotations: {}
+
+# Rendered as the agent config file (/etc/k8s-triage-agent/config.yaml).
+# Secrets are referenced by env var NAME (*_env), never stored here.
+config:
+  server:
+    addr: ":8080"
+    read_timeout: 15s
+  agent:
+    max_tool_calls: 15
+    max_cost_usd: 0.25
+    max_duration: 120s
+  llm:
+    provider: anthropic # anthropic | openai | gemini | openai-compatible
+    planner_model: claude-sonnet-5-5
+    executor_model: claude-haiku-5-5
+    api_key_env: ANTHROPIC_API_KEY
+    base_url: "" # only for openai-compatible
+  datadog:
+    site: datadoghq.com
+    api_key_env: DD_API_KEY
+    app_key_env: DD_APP_KEY
+  clusters: []
+  # - name: gke-prod-eu
+  #   kubeconfig_context: gke-prod-eu
+  #   namespaces:
+  #     allow: []
+  #     deny: [kube-system, kube-node-lease]
+
+otel:
+  # OTLP gRPC endpoint of the OpenTelemetry Collector (Datadog exporter).
+  # Empty means telemetry is a no-op. Rendered as OTEL_EXPORTER_OTLP_ENDPOINT.
+  endpoint: ""
+  serviceName: k8s-triage-agent
+
+# Existing Secrets to read credentials from. Each entry is optional: leave
+# `name` empty to omit the env var. Values are injected with secretKeyRef and
+# are never rendered into the manifests.
+existingSecrets:
+  datadogApiKey:
+    name: ""
+    key: api-key
+    envName: DD_API_KEY
+  datadogAppKey:
+    name: ""
+    key: app-key
+    envName: DD_APP_KEY
+  llmApiKey:
+    name: ""
+    key: api-key
+    # Must match config.llm.api_key_env.
+    envName: ANTHROPIC_API_KEY
+
+# Name of an existing Secret holding a kubeconfig for the target clusters.
+# Mounted read-only at /etc/k8s-triage-agent/kubeconfig and exposed through
+# KUBECONFIG. Leave empty when using Workload Identity only.
+kubeconfigSecret: ""
+kubeconfigSecretKey: kubeconfig
+
+extraEnv: []
+
+service:
+  enabled: false
+  type: ClusterIP
+  port: 8080
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    memory: 256Mi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

@@ -1,0 +1,28 @@
+# OpenTelemetry Collector (contrib) config for local verification without Datadog.
+# Same OTLP receiver as otel-collector.yaml, but the exporter prints what it
+# receives to the collector's log, so hack/verify-telemetry-local.sh can assert on
+# it. No keys, no network access beyond pulling the image.
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+processors:
+  batch:
+    timeout: 200ms
+
+exporters:
+  debug:
+    verbosity: detailed
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [debug]
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [debug]

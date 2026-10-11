@@ -1,14 +1,20 @@
-# k8s-triage-agent
+# upsera-agent
 
-An AI agent that investigates Kubernetes incidents. It receives an alert or a
-question, gathers cluster evidence on its own, and returns ranked hypotheses
-with the exact evidence behind each one.
+Open source AI agents for platform and SRE work, built in Go. The first agent
+is **k8s-triage-agent**: it takes a Datadog monitor alert for a Kubernetes
+workload, gathers evidence on its own, and returns ranked hypotheses with the
+exact evidence behind each one.
 
-Read-only by default. It cannot change your cluster.
+Read-only by default. It cannot change your cluster, and it never writes to
+Datadog.
 
-> **Status: early development.** The design is settled and documented in
-> [docs/PRD.md](docs/PRD.md). The scenario benchmark comes first, the agent
-> follows. See [Roadmap](#roadmap) for what actually works today.
+> **Status: early development, Phase 0 (foundations) only.** The product design
+> is in the [PRD](docs/k8s-triage-agent-prd.html). What exists today is the
+> scaffolding, config loading, telemetry, health endpoints, reader RBAC, a Helm
+> chart, a dev environment, CI, and the ADRs. There are no detectors, tools,
+> LLM calls, Datadog client, or database yet. Sections below that describe
+> investigations describe the target, not current behaviour. See
+> [Roadmap](#roadmap).
 
 ---
 
@@ -16,25 +22,26 @@ Read-only by default. It cannot change your cluster.
 
 The first 15 minutes of a Kubernetes incident are mechanical: pull pod status,
 read events, find the right container's logs, check node pressure, compare
-against the last rollout, correlate with Prometheus. It is the same work every
-time, it is already written down in runbooks, and it is what stands between an
-on-call engineer and their first real hypothesis.
+against the last rollout, correlate with Datadog metrics, logs, and traces. It
+is the same work every time, it is already written down in runbooks, and it is
+what stands between an on-call engineer and their first real hypothesis.
 
-This agent does that part.
+k8s-triage-agent does that part.
 
-## What it does
+## What it will do
 
-Given `KubePodCrashLooping` firing on `checkout-api`, it works through the
-cluster on its own and comes back with something like:
+Given a Datadog monitor firing on `checkout-api`, it works through the cluster
+and Datadog on its own and comes back with something like this. This is the
+target output, not something that runs today:
 
 ```
 Hypothesis 1 (high confidence)
   Container is OOM-killed because the memory limit sits below steady-state usage.
 
   Evidence:
-    describe_resource   lastState.terminated.reason=OOMKilled, exitCode 137
-    query_prometheus    container_memory_working_set_bytes p95 = 480Mi, limit 512Mi
-    get_rollout_history no image change in 14 days, so this is not a regression
+    k8s_describe        lastState.terminated.reason=OOMKilled, exitCode 137
+    dd_metrics          kubernetes.memory.working_set p95 = 480Mi, limit 512Mi
+    rollout_history     no image change in 14 days, so this is not a regression
 
   Suggested action: raise memory limit to 768Mi  (risk: low, needs approval)
 
@@ -49,40 +56,46 @@ Unknowns
 Three rules the output always follows:
 
 1. **Every hypothesis cites real evidence.** Citations point at tool calls that
-   actually happened, and the raw output is stored so you can check.
+   actually happened, and a redacted excerpt is stored so you can check.
 2. **It says what it does not know.** `unknowns` is never omitted.
 3. **It reports what it ruled out.** That saves you from repeating the checks.
 
 ## Architecture
 
+Datadog is the only source of alerts and telemetry. Live cluster state comes
+from the Kubernetes API of each target cluster. The agent runs outside the
+clusters it diagnoses and reaches them remotely.
+
 ```mermaid
 graph TB
     subgraph TRIG["Triggers"]
-        AM["Alertmanager"]
+        DDM["Datadog monitor webhook"]
         SL["Slack"]
         CL["CLI"]
     end
 
-    subgraph SVC["Agent Service, runs OUTSIDE the monitored cluster"]
+    subgraph SVC["Agent service, runs OFF-CLUSTER or on a management cluster"]
         API["API Layer<br/>webhook, slash command, REST"]
-        ORCH["Investigation Orchestrator<br/>lifecycle, iteration + cost budget"]
-        AGENT["Agent Loop<br/>plan, act, observe"]
+        ORCH["Investigation Orchestrator<br/>lifecycle, call + cost budget"]
+        AGENT["Agent Loop<br/>planner and executor roles"]
         CTX["Prompt + Context Builder<br/>compaction, untrusted-data delimiting, redaction"]
-        LLM["LLM Provider Abstraction"]
+        LLM["LLM Provider Interface<br/>Anthropic, OpenAI, Gemini, OpenAI-compatible"]
         REG["Tool Registry<br/>typed, schema-validated, read-only"]
-        DET["Deterministic Analyzers<br/>scheduling fit, selector match, limits vs usage"]
+        DET["Deterministic Detectors<br/>known failure signatures"]
     end
 
-    subgraph SRC["Data Sources"]
-        K8S["Kubernetes API<br/>read-only ServiceAccount<br/>informer-backed cache"]
-        PROM["Prometheus + Alertmanager"]
-        OBS["SigNoz / ClickHouse<br/>logs and traces"]
-        GIT["GitOps repo + CI<br/>change correlation"]
+    subgraph TGT["Target clusters, reached remotely"]
+        K8S["Kubernetes API<br/>read-only ServiceAccount<br/>kubeconfig context / Workload Identity"]
     end
 
-    PG[("Postgres<br/>investigations, tool traces, feedback")]
+    subgraph SRC["Data sources"]
+        DD["Datadog<br/>metrics, logs, traces, monitors, events<br/>read-only keys"]
+        GH["GitHub / GitHub Actions<br/>change correlation"]
+    end
 
-    AM --> API
+    STORE[("Evidence store<br/>SQLite, then Postgres")]
+
+    DDM --> API
     SL --> API
     CL --> API
 
@@ -95,157 +108,218 @@ graph TB
     AGENT --> DET
 
     REG --> K8S
-    REG --> PROM
-    REG --> OBS
-    REG --> GIT
+    REG --> DD
+    REG --> GH
     DET --> K8S
 
-    ORCH --> PG
-    AGENT -. "raw tool output" .-> PG
+    ORCH --> STORE
+    AGENT -. "redacted excerpts" .-> STORE
     ORCH -- "result + evidence" --> API
 ```
 
-Four decisions worth calling out:
+Decisions worth calling out:
 
 **No shell, no kubectl passthrough.** The agent's only access to the world is a
 set of typed, schema-validated tools. The blast radius is reviewable in a pull
 request. See [ADR 0001](docs/adr/0001-typed-tools-over-shell.md).
 
-**Deterministic checks stay in Go.** Scheduling fit, selector matching, and
-limits-versus-usage arithmetic are code. The model orchestrates and explains, it
-does not do math that a computer can do correctly.
-
-**Tool output is compacted before it reaches the model.** Raw output goes to
-storage, a summary goes to the context. A large cluster otherwise exhausts the
-window in three tool calls.
-
 **It runs outside the cluster it watches.** An agent sharing a failure domain
 with its subject is offline during exactly the incidents it exists for. See
 [ADR 0002](docs/adr/0002-run-outside-the-monitored-cluster.md).
+
+**The LLM is configuration.** Provider, planner model, and executor model are
+set in config, behind a thin Go interface: Anthropic, OpenAI, Gemini, or any
+OpenAI-compatible endpoint such as Ollama or vLLM. A provider needs tool calling
+and structured output, and counts as supported only if it passes the eval
+suite. See [ADR 0003](docs/adr/0003-llm-provider-interface.md), which is still
+proposed.
+
+**Deterministic checks stay in Go.** Known signatures such as OOMKilled or
+ImagePullBackOff are detected by code. The model correlates and explains, it
+does not do work a computer can do correctly.
+
+**Tool output is compacted and redacted before it reaches the model.** Only
+redacted excerpts are stored, and raw logs stay in Datadog.
+
+**Datadog is read-only.** The agent reads monitors, metrics, logs, traces, and
+events through a `DatadogClient` interface and never creates, edits, mutes, or
+resolves anything. See [ADR 0006](docs/adr/0006-datadog-client-api-vs-mcp.md).
+
+Storage and the home of remediation records are tracked in
+[ADR 0004](docs/adr/0004-storage.md) and
+[ADR 0005](docs/adr/0005-remediation-requests-crd-vs-db.md). Both are proposed.
 
 ## Safety model
 
 | Control | Implementation |
 |---------|----------------|
-| Read-only access | ClusterRole with `get`, `list`, `watch` only. No mutating verbs exist in the binding |
-| No secret exposure | `secrets` is not in the ClusterRole at all. The API has no metadata-only read, so the agent infers Secret problems from Pod status and Events |
+| Read-only access | Reader ClusterRole with `get`, `list`, `watch` only. No write verbs in the binding |
+| No secret exposure | `secrets` is not in the ClusterRole at all. The agent infers Secret problems from Pod status and Events |
 | No exec | `pods/exec` and `pods/portforward` excluded. Not needed for diagnosis, and an exfiltration path |
-| Redaction | All tool output passes a scrubber before entering the model context |
-| Prompt injection | Cluster-sourced text (annotations, log lines, image names) is delimited as untrusted data. Anyone who can write a log line can try to steer the agent |
+| Datadog is read-only | Read-only API and application keys with the narrowest scopes, taken from the environment. The agent never writes to Datadog |
+| Redaction | Tool output, including Datadog log, span, and monitor-message excerpts, passes a scrubber before entering the model context |
+| Prompt injection | Cluster- and Datadog-sourced text (annotations, log lines, monitor messages) is delimited as untrusted data |
 | Budgets | Hard per-investigation ceilings on tool calls, wall clock, and cost. Stops, not warnings |
-| Audit | Every tool call and model call logged with inputs, outputs, and requesting identity |
+| Audit | Every tool call and model call recorded with inputs, outputs, and requesting identity |
 
-Remediation is Phase 2, uses a separate ServiceAccount, and requires explicit
-human approval plus a dry-run diff for every action. See
-[deploy/kubernetes/rbac.yaml](deploy/kubernetes/rbac.yaml) for the annotated
-permission set.
+Of these, the reader RBAC is what exists today (see
+[deploy/helm/k8s-triage-agent](deploy/helm/k8s-triage-agent)). Redaction,
+budgets, and audit are designed but not built.
 
-## Quick start
+Remediation is Phase 4, uses a separate ServiceAccount, and requires explicit
+human approval plus a dry-run diff for every action.
 
-Requires Go 1.24+, a kubeconfig, and an Anthropic API key.
+## Development
 
-```bash
-git clone https://github.com/davidsugianto/k8s-triage-agent
-cd k8s-triage-agent
-
-cp configs/config.example.yaml configs/config.yaml
-export ANTHROPIC_API_KEY=sk-...
-
-make build
-./bin/agent-cli investigate --namespace prod --workload checkout-api
-```
-
-Run the benchmark against a throwaway cluster:
+Requires Go 1.26+, `make`, Docker, `kind`, `kubectl`, `helm`, and OpenTofu
+(`tofu`).
 
 ```bash
-make kind-up
-make eval
-make kind-down
+make ci            # build, vet, test, lint, helm-lint, tofu-validate
 ```
+
+To run the agent locally against a throwaway cluster:
+
+```bash
+export DD_API_KEY=...             # read-only Datadog API key
+export DD_APP_KEY=...             # read-only Datadog application key
+export DD_SITE=datadoghq.com      # your Datadog site
+export ANTHROPIC_API_KEY=...      # or the key for the provider set in config
+
+make dev-up                       # create kind cluster upsera-lab (context kind-upsera-lab), apply reader RBAC
+make dev-collector                # start the OpenTelemetry Collector (Datadog exporter)
+make dev-run                      # run agent-server as the read-only ServiceAccount against it
+make check-datadog                # verify the Datadog credentials
+make verify-telemetry             # no Datadog needed: agent telemetry reaches a local collector
+make dev-down                     # delete the kind cluster
+```
+
+`make help` lists every target. Nothing calls an LLM in Phase 0, so the LLM key
+is only needed once a later phase adds it.
+
+Configuration is a YAML file (copy `configs/config.example.yaml` to
+`configs/config.yaml`). Secrets are referenced by environment variable name in
+the file and are never stored in it.
+
+**Dev only ever touches the kind cluster `kind-upsera-lab`.** The dev targets
+pass `--context kind-upsera-lab` explicitly and refuse to run against any other
+context. Do not point them at a real cluster, and do not switch your current
+kubectl context to run them.
+
+Infrastructure for the GKE lab is OpenTofu in `infra/gke-lab`. CI runs
+`tofu fmt`, `init -backend=false`, and `validate` only. Nothing in this repo
+runs `tofu plan` or `tofu apply` for you.
 
 ## Project layout
 
 ```
 .
 ├── cmd/
-│   ├── agent-server/          # API, Alertmanager webhook, Slack surface
-│   └── agent-cli/             # local investigation from kubeconfig context
+│   ├── agent-server/          # service: health endpoints now; webhook and Slack later
+│   └── agent-cli/             # local investigation from a kubeconfig context
 ├── internal/
+│   ├── config/                # YAML config loading
 │   ├── handler/               # HTTP, Slack, webhook delivery
 │   ├── usecase/
 │   │   ├── investigation/     # orchestration, budgets, result assembly
-│   │   └── remediation/       # Phase 2: approval flow, dry-run, execute
+│   │   └── remediation/       # Phase 4: approval flow, dry-run, execute
 │   ├── agent/
-│   │   ├── loop/              # plan, act, observe
-│   │   ├── llm/               # provider abstraction
+│   │   ├── loop/              # planner and executor loop
+│   │   ├── llm/               # provider interface and adapters
 │   │   ├── prompt/            # system prompt, context assembly
 │   │   └── tools/             # tool registry and schemas
 │   ├── repository/
-│   │   ├── kubernetes/        # informer-backed read-only client
-│   │   ├── prometheus/
-│   │   ├── logs/
-│   │   └── postgres/          # investigation persistence
-│   ├── domain/                # Investigation, Hypothesis, Evidence
-│   └── config/
+│   │   ├── kubernetes/        # read-only client
+│   │   ├── datadog/           # DatadogClient: API and MCP backends, record/replay
+│   │   └── postgres/          # persistence from Phase 2
+│   └── domain/                # Investigation, Hypothesis, Evidence
 ├── pkg/redact/                # secret and credential scrubbing
-├── deploy/kubernetes/         # RBAC and management-cluster manifests
+├── deploy/helm/               # Helm chart for k8s-triage-agent
+├── infra/gke-lab/             # OpenTofu for the GKE lab
 ├── configs/                   # example configuration
 ├── test/
 │   ├── scenarios/             # reproducible broken clusters, known root causes
 │   └── harness/               # runs scenarios, scores results
 └── docs/
-    ├── PRD.md                 # full product requirements
-    └── adr/                   # architecture decision records
+    ├── k8s-triage-agent-prd.html   # product requirements
+    ├── adr/                        # architecture decision records
+    └── archive/                    # superseded documents
 ```
 
-## How correctness is measured
+Most packages above are placeholders in Phase 0. The directories exist so the
+layout is settled, not because the code does.
 
-The benchmark exists before the agent, and it is the CI gate on every prompt or
-tool change.
+## How correctness will be measured
 
-Each scenario in `test/scenarios/` is a reproducible broken cluster with a known
-root cause. Scoring checks three things:
+The eval suite starts in Phase 1 and gates every later release.
+
+Each scenario in `test/scenarios/` is a reproducible broken workload with a
+known root cause. Kubernetes-only scenarios run on kind. Scenarios that need
+Datadog data use recorded Datadog responses in pull request CI and the live lab
+nightly. Because model output varies, each scenario runs three times and passes
+when at least two runs name the expected cause with valid evidence.
+
+Scoring checks:
 
 - Does the top-ranked hypothesis match the real root cause?
 - Did the cited tool calls actually happen and return what the hypothesis
   claims? A right answer built on fabricated evidence scores as a failure.
-- How many tool calls and how much money did it take?
+- How many tool calls and how much money did it take, per provider and model?
 
-Ten scenarios are held out and never used during prompt iteration. At least two
-have "insufficient evidence" as the correct answer, because an agent that always
-produces a confident hypothesis is guessing rather than diagnosing.
+At least one scenario is a prompt injection through a log line, and the correct
+result is a right diagnosis with no unsafe proposal. An agent that confidently
+sends you after a NetworkPolicy when it is actually an OOM kill is worse than no
+agent at 3am, so a wrong answer stated with high confidence is the failure to
+watch most closely.
 
-**The metric that matters most is false confidence rate**, not raw accuracy. An
-agent that says "I do not know" is useful. An agent that confidently sends you
-after a NetworkPolicy when it is actually an OOM kill is worse than no agent at
-3am.
+| Metric | v0.5 | v1.0 |
+|--------|------|------|
+| Top-1 accuracy on eval suite (reference model) | 70% | 85% |
+| RCA claims with linked evidence | 100% | 100% |
+| Unsafe actions executed (eval and staging) | 0 | 0 |
+| Alert to RCA, p50 | 120 s | 90 s |
 
-| Metric | Target |
-|--------|--------|
-| Top-1 accuracy on benchmark | 80% |
-| False confidence rate | under 5% |
-| Time to first hypothesis | 60s p95 |
-| Cost per investigation | $0.25 p95 |
+These are targets from the PRD, not measured results. Nothing has been
+measured yet.
 
 ## Roadmap
 
-- [ ] **M0** Benchmark: 15 reproducible scenarios on kind, automated scoring
-- [ ] **M1** Tool layer: read-only client, 8 core tools, `envtest` coverage
-- [ ] **M2** Agent loop: planning, dispatch, budget enforcement, structured output
-- [ ] **M3** CLI surface, full benchmark run, prompt iteration to 70% top-1
-- [ ] **M4** Prometheus and log tools, 40 scenarios, target 80%
-- [ ] **M5** Slack bot, Alertmanager webhook, Postgres persistence
-- [ ] **M6** Shadow mode against production alerts, feedback capture
-- [ ] **M7** Phase 2 remediation with approval flow and a narrow allowlist
+Phase 0 is the only phase with working code, and it is still in progress.
+
+- [ ] **Phase 0, foundations:** repo, Go module, Makefile, golangci-lint,
+  GitHub Actions CI, config loading, health endpoints, OpenTelemetry to Datadog
+  through the Collector, reader ClusterRole with no Secrets, Helm chart, kind
+  dev environment, OpenTofu for the GKE lab, ADRs
+- [ ] **Phase 1, diagnose CLI:** single-workload CLI, seven failure detectors,
+  Kubernetes tools and MCP server, redaction, SQLite evidence store, LLM
+  interface with Anthropic and one OpenAI-compatible adapter, first six eval
+  scenarios
+- [ ] **Phase 2, alert investigator:** Datadog monitor webhook, incident
+  grouping, Postgres, `DatadogClient` with metrics, logs, spans, monitors and
+  events, planner and executor loop, Slack RCA posts
+- [ ] **Phase 3, context and changes:** topology graph, change timeline from
+  Datadog events plus Argo CD and GitHub Actions where needed, "what changed"
+  ranking
+- [ ] **Phase 4, guarded remediation:** typed action catalog, policy gate,
+  approvals, dry-run and verification, audit log, kill switch. Decides
+  [ADR 0005](docs/adr/0005-remediation-requests-crd-vs-db.md)
+- [ ] **Phase 5, scale and governance:** multiple clusters, SSO, dashboards as
+  code, incident mode, remaining provider adapters with a per-provider accuracy
+  and cost report
 
 ## Prior art
 
 [k8sgpt](https://github.com/k8sgpt-ai/k8sgpt) and
 [HolmesGPT](https://github.com/robusta-dev/holmesgpt) occupy the same space and
-are worth running against your own clusters before adopting anything here. This
-project exists because deep integration with a specific stack is where most of
-the diagnostic accuracy comes from, and because the safety model needed for a
+are worth running against your own clusters before adopting anything here.
+Datadog's own Bits AI SRE does alert investigation inside Datadog. This project
+exists because deep integration with a specific stack is where most of the
+diagnostic accuracy comes from, because control over prompts, evals, and the
+data path matters to some teams, and because the safety model needed for a
 production cluster is stricter than a general-purpose tool tends to ship with.
+
+The original, superseded PRD is kept at
+[docs/archive/PRD-v0-original.md](docs/archive/PRD-v0-original.md).
 
 ## License
 

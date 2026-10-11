@@ -1,0 +1,945 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>upsera-agent PRD: k8s-triage-agent</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@87,500..800&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: engineering spec. Sticky section index on the left, prose column ~70ch, figures and tables run full content width. */
+:root {
+  --paper: #F5F7F9;
+  --surface: #FFFFFF;
+  --ink: #15202C;
+  --muted: #5B6778;
+  --line: #DCE1E8;
+  --line-strong: #A9B3C1;
+  --accent: #17708E;
+  --accent-soft: #E1F0F5;
+  --zone: #EEF2F6;
+  --bar: #C4CEDA;
+  --ok: #2B7A4B;
+  --warn: #9A5A06;
+  --bad: #B3261E;
+  --code-bg: #EDF0F4;
+  --f-display: "Archivo", "Helvetica Neue", Arial, sans-serif;
+  --f-body: "IBM Plex Sans", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #0F141A; --surface: #161D26; --ink: #E3E8EF; --muted: #97A3B4;
+    --line: #283240; --line-strong: #4A5768; --accent: #5BB6D4; --accent-soft: #15303B;
+    --zone: #131A22; --bar: #3A4656; --ok: #6CC290; --warn: #E3A64C; --bad: #F07C73;
+    --code-bg: #1C2430; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --paper: #0F141A; --surface: #161D26; --ink: #E3E8EF; --muted: #97A3B4;
+  --line: #283240; --line-strong: #4A5768; --accent: #5BB6D4; --accent-soft: #15303B;
+  --zone: #131A22; --bar: #3A4656; --ok: #6CC290; --warn: #E3A64C; --bad: #F07C73;
+  --code-bg: #1C2430; color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+body {
+  background: var(--paper); color: var(--ink);
+  font-family: var(--f-body); font-size: 15.5px; line-height: 1.6;
+  padding-inline: 16px; padding-block: 0 64px;
+}
+a { color: var(--accent); text-underline-offset: 2px; }
+a:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.shell { max-width: 1200px; margin: 0 auto; display: grid; grid-template-columns: 210px minmax(0, 1fr); gap: 48px; }
+@media (max-width: 920px) { .shell { grid-template-columns: minmax(0, 1fr); gap: 0; } }
+
+/* Index */
+.toc { position: sticky; top: env(safe-area-inset-top, 0px); align-self: start; padding-block: 40px 24px; }
+.toc h2 { font-family: var(--f-mono); font-size: 11px; font-weight: 500; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); margin: 0 0 12px; }
+.toc ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; counter-reset: toc; }
+.toc li { counter-increment: toc; }
+.toc a { display: grid; grid-template-columns: 24px 1fr; padding: 4px 8px 4px 0; color: var(--ink); text-decoration: none; font-size: 13.5px; line-height: 1.35; border-radius: 4px; }
+.toc a::before { content: counter(toc); font-family: var(--f-mono); font-size: 11.5px; color: var(--muted); padding-top: 1px; }
+.toc a:hover { color: var(--accent); }
+.toc li.appx a::before { content: "A"; }
+@media (max-width: 920px) {
+  .toc { position: static; padding-block: 24px 0; }
+  .toc ol { grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); }
+}
+
+main { min-width: 0; padding-block: 40px 0; }
+
+/* Header */
+.doc-head { border-bottom: 2px solid var(--ink); padding-bottom: 28px; margin-bottom: 8px; }
+.kicker { font-family: var(--f-mono); font-size: 12px; letter-spacing: .1em; text-transform: uppercase; color: var(--accent); margin: 0 0 10px; }
+h1 { font-family: var(--f-display); font-stretch: 87%; font-weight: 800; font-size: clamp(32px, 5vw, 48px); line-height: 1.05; letter-spacing: -.01em; margin: 0 0 14px; text-wrap: balance; }
+.lede { font-size: 18px; line-height: 1.55; max-width: 64ch; margin: 0 0 22px; color: var(--ink); }
+.meta { display: flex; flex-wrap: wrap; gap: 8px 28px; margin: 0; font-size: 13px; }
+.meta div { display: grid; gap: 1px; }
+.meta dt { font-family: var(--f-mono); font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+.meta dd { margin: 0; font-weight: 500; }
+.pill { display: inline-block; font-family: var(--f-mono); font-size: 11px; font-weight: 500; padding: 1px 8px; border-radius: 99px; border: 1px solid currentColor; }
+.pill.draft { color: var(--warn); }
+
+/* Sections */
+section { padding-top: 40px; scroll-margin-top: 16px; }
+h2 { font-family: var(--f-display); font-stretch: 87%; font-weight: 700; font-size: 26px; line-height: 1.2; margin: 0 0 14px; display: flex; gap: 14px; align-items: baseline; text-wrap: balance; }
+h2 .num { font-family: var(--f-mono); font-size: 14px; font-weight: 500; color: var(--accent); min-width: 22px; }
+h3 { font-family: var(--f-display); font-weight: 650; font-size: 17.5px; margin: 26px 0 8px; text-wrap: balance; }
+p, ul, ol.prose { max-width: 70ch; }
+p { margin: 0 0 12px; }
+ul { padding-left: 20px; margin: 0 0 12px; }
+li { margin-bottom: 4px; }
+.muted { color: var(--muted); }
+.small { font-size: 13.5px; }
+code, kbd { font-family: var(--f-mono); font-size: .88em; background: var(--code-bg); padding: 1px 5px; border-radius: 3px; }
+pre { font-family: var(--f-mono); font-size: 13px; line-height: 1.55; background: var(--code-bg); border: 1px solid var(--line); border-radius: 6px; padding: 14px 16px; overflow-x: auto; margin: 0 0 16px; }
+pre code { background: none; padding: 0; font-size: inherit; }
+pre .c { color: var(--muted); }
+
+.cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px 32px; }
+.cols > * { min-width: 0; }
+
+.callout { border-left: 3px solid var(--accent); background: var(--accent-soft); padding: 12px 16px; border-radius: 0 6px 6px 0; max-width: 78ch; margin: 0 0 16px; }
+.callout p:last-child { margin: 0; }
+
+/* Tables */
+.tbl { overflow-x: auto; margin: 0 0 18px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+th, td { text-align: left; vertical-align: top; padding: 9px 12px; border-bottom: 1px solid var(--line); }
+tr:last-child td { border-bottom: 0; }
+th { font-family: var(--f-mono); font-size: 11px; font-weight: 500; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); background: var(--zone); white-space: nowrap; }
+td.id { font-family: var(--f-mono); font-size: 12.5px; white-space: nowrap; color: var(--accent); }
+td.nw { white-space: nowrap; }
+td.tn { font-variant-numeric: tabular-nums; }
+tr.group td { background: var(--zone); font-family: var(--f-display); font-weight: 650; font-size: 13.5px; padding-block: 7px; }
+
+.pri { font-family: var(--f-mono); font-size: 11.5px; font-weight: 500; white-space: nowrap; }
+.pri.must { color: var(--ink); }
+.pri.should { color: var(--muted); }
+.pri.could { color: var(--muted); font-style: italic; }
+
+.risk { display: inline-flex; align-items: center; gap: 6px; font-family: var(--f-mono); font-size: 12px; font-weight: 500; white-space: nowrap; }
+.risk::before { content: ""; width: 8px; height: 8px; border-radius: 2px; background: currentColor; }
+.risk.low { color: var(--ok); } .risk.med { color: var(--warn); } .risk.high { color: var(--bad); }
+.risk.never { color: var(--muted); text-decoration: line-through; }
+
+/* Figures */
+figure { margin: 8px 0 22px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 16px 16px 12px; }
+.fig-scroll { overflow-x: auto; }
+figure svg { display: block; width: 100%; height: auto; min-width: 720px; color: var(--muted); }
+figcaption { font-size: 13.5px; color: var(--muted); margin-top: 10px; max-width: 80ch; }
+figcaption b { color: var(--ink); font-weight: 600; }
+
+.d-box { fill: var(--surface); stroke: var(--line-strong); stroke-width: 1.2; }
+.d-gate { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.8; }
+.d-band { fill: var(--zone); stroke: var(--line-strong); stroke-width: 1.2; }
+.d-zone { fill: var(--zone); stroke: var(--line-strong); stroke-width: 1; stroke-dasharray: 5 4; }
+.d-t { fill: var(--ink); font-family: var(--f-body); font-size: 13px; font-weight: 600; }
+.d-s { fill: var(--muted); font-family: var(--f-body); font-size: 10.5px; }
+.d-l { fill: var(--muted); font-family: var(--f-mono); font-size: 10.5px; }
+.d-h { fill: var(--muted); font-family: var(--f-mono); font-size: 10.5px; letter-spacing: .12em; }
+.d-acc { fill: var(--accent); }
+.d-line { fill: none; stroke: var(--muted); stroke-width: 1.3; }
+.d-line.acc { stroke: var(--accent); stroke-width: 1.6; }
+.d-line.dash { stroke-dasharray: 5 4; }
+.d-grid { stroke: var(--line); stroke-width: 1; }
+.d-bar { fill: var(--bar); }
+.d-bar.thin { fill: var(--line-strong); }
+.d-ms { fill: var(--accent); }
+
+/* Autonomy ladder */
+.ladder { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--surface); margin: 0 0 18px; }
+.ladder > div { padding: 14px 16px; border-right: 1px solid var(--line); min-width: 0; }
+.ladder > div:last-child { border-right: 0; }
+.ladder .lv { font-family: var(--f-mono); font-size: 12px; color: var(--accent); font-weight: 500; }
+.ladder h4 { font-family: var(--f-display); font-size: 16px; margin: 2px 0 6px; }
+.ladder p { font-size: 13.5px; margin: 0 0 8px; }
+.ladder .def { font-family: var(--f-mono); font-size: 11px; color: var(--muted); }
+@media (max-width: 760px) { .ladder { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } .ladder > div:nth-child(2) { border-right: 0; } .ladder > div:nth-child(-n+2) { border-bottom: 1px solid var(--line); } }
+@media (max-width: 460px) { .ladder { grid-template-columns: minmax(0, 1fr); } .ladder > div { border-right: 0; border-bottom: 1px solid var(--line); } .ladder > div:last-child { border-bottom: 0; } }
+
+/* Slack preview */
+.rca { font-size: 14px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; max-width: 78ch; margin: 0 0 18px; display: grid; gap: 6px; }
+.rca .hd { font-family: var(--f-mono); font-size: 12px; color: var(--muted); }
+.rca .cause { font-weight: 600; }
+.rca .ev { font-family: var(--f-mono); font-size: 12px; color: var(--muted); }
+.rca .act { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+.rca .btn { font-family: var(--f-mono); font-size: 12px; padding: 3px 10px; border-radius: 4px; border: 1px solid var(--line-strong); }
+.rca .btn.pri { border-color: var(--accent); color: var(--accent); }
+
+/* Phases */
+.phases { display: grid; gap: 0; border-top: 1px solid var(--line); margin-bottom: 18px; }
+.phase { display: grid; grid-template-columns: 190px minmax(0, 1fr); gap: 8px 28px; padding: 18px 0; border-bottom: 1px solid var(--line); }
+.phase .ph-id { font-family: var(--f-mono); font-size: 12px; color: var(--accent); }
+.phase h3 { margin: 2px 0 4px; }
+.phase .wk { font-family: var(--f-mono); font-size: 12px; color: var(--muted); }
+.phase .ph-body { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 8px 28px; }
+.phase h5 { font-family: var(--f-mono); font-size: 10.5px; font-weight: 500; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); margin: 0 0 6px; }
+.phase ul { font-size: 14px; margin: 0; }
+.phase .exit { font-size: 14px; }
+@media (max-width: 760px) { .phase, .phase .ph-body { grid-template-columns: minmax(0, 1fr); } }
+
+footer { margin-top: 48px; padding-top: 16px; border-top: 1px solid var(--line); font-size: 13px; color: var(--muted); }
+
+@media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth; } }
+</style>
+
+<div class="shell">
+  <nav class="toc" aria-label="Sections">
+    <h2>Contents</h2>
+    <ol>
+      <li><a href="#summary">Summary</a></li>
+      <li><a href="#problem">Problem and goals</a></li>
+      <li><a href="#users">Users</a></li>
+      <li><a href="#requirements">Requirements</a></li>
+      <li><a href="#architecture">Architecture</a></li>
+      <li><a href="#investigation">Investigation loop</a></li>
+      <li><a href="#remediation">Remediation safety</a></li>
+      <li><a href="#data">Data model and interfaces</a></li>
+      <li><a href="#stack">Tech stack</a></li>
+      <li><a href="#security">Security and governance</a></li>
+      <li><a href="#eval">Evaluation and metrics</a></li>
+      <li><a href="#phases">Phased delivery</a></li>
+      <li><a href="#risks">Risks</a></li>
+      <li><a href="#questions">Open questions</a></li>
+      <li class="appx"><a href="#checklist">Buyer checklist coverage</a></li>
+    </ol>
+  </nav>
+
+  <main>
+    <header class="doc-head">
+      <p class="kicker">upsera-agent · Product requirements document</p>
+      <h1>k8s-triage-agent: an AI SRE agent for Kubernetes operations</h1>
+      <p class="lede">An off-cluster agent that turns a Datadog monitor alert into an evidence-backed root cause in about a minute and a half (p50), and proposes fixes that run only through a typed action catalog, a policy gate, and human approval.</p>
+      <dl class="meta">
+        <div><dt>Project</dt><dd>upsera-agent</dd></div>
+        <div><dt>Status</dt><dd><span class="pill draft">Draft</span></dd></div>
+        <div><dt>Version</dt><dd>0.3</dd></div>
+        <div><dt>Owner</dt><dd>David (@davidsugianto)</dd></div>
+        <div><dt>Updated</dt><dd>11 Oct 2026</dd></div>
+        <div><dt>Target</dt><dd>GKE, Datadog, Go, GitHub, open source</dd></div>
+      </dl>
+    </header>
+
+    <section id="summary">
+      <h2><span class="num">1</span>Summary</h2>
+      <p>Operating production Kubernetes means reading pod states, events, rollout history, metrics, and logs across several tools before anyone can say why something broke. This project builds an AI SRE agent that does that legwork automatically, explains its conclusion with linked evidence, and offers a safe next action.</p>
+      <p>The design follows the six evaluation criteria from Atmosly's article <a href="https://medium.com/atmosly/how-to-choose-an-ai-sre-agent-for-kubernetes-operations-eb1dc52c5884">How to Choose an AI SRE Agent for Kubernetes Operations</a> (Aug 2026): Kubernetes-native understanding, multi-signal incident investigation, controlled remediation, toolchain integration, observability context, and security governance. Here those criteria are treated as build requirements instead of a buying checklist. Appendix A maps each of the article's buyer questions to the section that answers it.</p>
+      <p><b>Scope.</b> <code>upsera-agent</code> is the project and GitHub repository; <code>k8s-triage-agent</code> is its first agent and the only one this PRD specifies. Shared parts (LLM providers, the Datadog client, read-only tools, redaction, policy, audit) sit in agent-neutral packages so later agents can reuse them, but no other agent is designed here. The agent runs outside the clusters it diagnoses (ADR 0002), so it stays available during the incidents it exists for. The LLM is a configuration choice (Anthropic, OpenAI, Gemini, or any OpenAI-compatible endpoint), not a dependency.</p>
+      <p><b>Datadog-native.</b> Alerts come from Datadog monitors, and telemetry reaches Datadog through the OpenTelemetry Collector and custom exporters (and the Datadog Agent, if deployed; see open questions). Datadog is therefore the only alert and telemetry source: there is no Prometheus, Alertmanager, or SigNoz. The agent reads live cluster state from the Kubernetes API and everything else from Datadog. The investigation method comes from the team's existing SRE skills (<code>datadog-investigate</code>, <code>k8s-triage</code>, <code>sre-incident-response</code>), turned into a service with budgets, policy, and evals. It does not try to replace Datadog's own Bits AI SRE. What it adds is in-cluster, policy-gated remediation, an open eval suite, and control over prompts and the data path.</p>
+      <div class="callout">
+        <p><b>Design stance.</b> Rules first, LLM second. Deterministic detectors catch known failure signatures cheaply; the LLM handles correlation and explanation. The LLM never holds write credentials: it can only propose actions from a fixed catalog, and a separate policy-gated executor carries them out.</p>
+      </div>
+    </section>
+
+    <section id="problem">
+      <h2><span class="num">2</span>Problem and goals</h2>
+      <div class="cols">
+        <div>
+          <h3>Problem</h3>
+          <ul>
+            <li>Alerts say what is wrong (high error rate, pod restarting) but rarely why. The on-call engineer rebuilds context by hand from <code>kubectl</code>, Datadog dashboards, logs and traces, and the deploy history.</li>
+            <li>Most incidents trace back to a recent change: a rollout, a config edit, a scaling event. Linking the change to the symptom is slow and error-prone at 3 a.m.</li>
+            <li>Generic AI assistants can answer questions about a cluster but don't model Kubernetes relationships, cite evidence, or respect production change controls.</li>
+          </ul>
+        </div>
+        <div>
+          <h3>Goals</h3>
+          <ul>
+            <li>Cut time from alert to probable root cause to under 90 seconds (p50).</li>
+            <li>Back every conclusion with inspectable evidence.</li>
+            <li>Offer remediation that is safe by default, with human control over what runs.</li>
+            <li>Fit the existing GKE stack: Datadog monitors and telemetry, the OpenTelemetry Collector with custom exporters, Slack, and Argo CD and GitHub Actions where used.</li>
+            <li>Ship as a well-documented open source repo with a reproducible eval suite.</li>
+          </ul>
+        </div>
+      </div>
+      <h3>Non-goals for v1</h3>
+      <ul>
+        <li>Replacing monitoring or alerting. The agent consumes Datadog monitor alerts; it never creates, edits, mutes, or resolves monitors, dashboards, or Datadog incidents.</li>
+        <li>A free-form chatbot with cluster-admin access.</li>
+        <li>Other agents in upsera-agent (cost review, security, and so on). Shared packages stay agent-neutral, but only k8s-triage-agent is in scope.</li>
+        <li>Fixing application code. The agent can point at a bad commit but won't write the patch.</li>
+        <li>Non-Kubernetes infrastructure (VMs, managed databases) beyond reading their metrics.</li>
+      </ul>
+    </section>
+
+    <section id="users">
+      <h2><span class="num">3</span>Users</h2>
+      <div class="tbl"><table>
+        <thead><tr><th>Persona</th><th>Needs</th><th>Main touchpoint</th></tr></thead>
+        <tbody>
+          <tr><td><b>On-call SRE</b></td><td>A ranked root cause with evidence in the alert thread, and a one-click safe fix.</td><td>Slack, <code>kubectl triage</code></td></tr>
+          <tr><td><b>Platform engineer</b></td><td>Control over which actions run where, audit trail, cost and accuracy visibility.</td><td>Helm values, OPA policies, Datadog dashboard</td></tr>
+          <tr><td><b>Application developer</b></td><td>A plain explanation of why their service broke and which change caused it.</td><td>Slack thread, GitHub PR comment</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <section id="requirements">
+      <h2><span class="num">4</span>Requirements</h2>
+      <p>Grouped by the six criteria. Priority uses MoSCoW (Must, Should, Could). The phase column refers to <a href="#phases">section 12</a>.</p>
+      <div class="tbl"><table>
+        <thead><tr><th>ID</th><th>Requirement</th><th>Priority</th><th>Phase</th></tr></thead>
+        <tbody>
+          <tr class="group"><td colspan="4">Kubernetes-native understanding</td></tr>
+          <tr><td class="id">KN-1</td><td>Model Pods, ReplicaSets, Deployments, StatefulSets, DaemonSets, Jobs, Services, EndpointSlices, Ingress, NetworkPolicies, HPA, PDB, Nodes, and PVCs, including owner references and label selectors. The reader role is an exact allow-list of read-only resources, never Secrets or ConfigMaps; it adds pod and node status, Endpoints, ResourceQuotas, LimitRanges, and the metrics API (<code>deploy/kubernetes/rbac_test.go</code> enforces it).</td><td><span class="pri must">Must</span></td><td class="nw">1, 3</td></tr>
+          <tr><td class="id">KN-2</td><td>Read status conditions, container states, exit codes, restart counts, and events for any workload.</td><td><span class="pri must">Must</span></td><td>1</td></tr>
+          <tr><td class="id">KN-3</td><td>Compare requests and limits with actual usage (from Datadog metrics); flag CPU throttling and OOM risk.</td><td><span class="pri should">Should</span></td><td>2</td></tr>
+          <tr><td class="id">KN-4</td><td>Detect rollout state: stuck rollouts, <code>ProgressDeadlineExceeded</code>, revision changes.</td><td><span class="pri must">Must</span></td><td>1</td></tr>
+          <tr><td class="id">KN-5</td><td>Deterministic detectors for CrashLoopBackOff, OOMKilled, ImagePullBackOff, Unschedulable, probe failures, NodeNotReady, and Evicted.</td><td><span class="pri must">Must</span></td><td>1</td></tr>
+
+          <tr class="group"><td colspan="4">Incident investigation</td></tr>
+          <tr><td class="id">INV-1</td><td>Turn Datadog monitor alerts into one incident per cluster, namespace, and workload (from the monitor's scope tags); group related alerts within a 10 minute window. Accept a pasted Datadog monitor, event, or incident link as input.</td><td><span class="pri must">Must</span></td><td>2</td></tr>
+          <tr><td class="id">INV-2</td><td>Run a bounded loop: at most 25 tool calls, 3 minutes wall clock, and a per-incident token budget. Phase 1 applies the call and token caps to the single-workload summary.</td><td><span class="pri must">Must</span></td><td class="nw">1, 2</td></tr>
+          <tr><td class="id">INV-3</td><td>Every claim in the RCA cites at least one evidence item (tool, arguments, excerpt, timestamp).</td><td><span class="pri must">Must</span></td><td>1</td></tr>
+          <tr><td class="id">INV-4</td><td>Rank up to three hypotheses with a confidence level (high, medium, low) and the observation that would disprove each.</td><td><span class="pri should">Should</span></td><td>2</td></tr>
+          <tr><td class="id">INV-5</td><td>Answer "what changed in this window?" from the change timeline and rank changes by proximity to the symptom.</td><td><span class="pri must">Must</span></td><td>3</td></tr>
+          <tr><td class="id">INV-6</td><td>On-demand investigation from the CLI and a Slack command.</td><td><span class="pri should">Should</span></td><td class="nw">1, 2</td></tr>
+          <tr><td class="id">INV-7</td><td>Engineers mark an RCA correct or wrong from Slack; marked incidents feed the eval set.</td><td><span class="pri should">Should</span></td><td>2</td></tr>
+          <tr><td class="id">INV-8</td><td>The closing summary states a causal chain: trigger, mechanism, why it crossed the monitor threshold, and recovery, followed by ruled-out, still-open, and contributing factors.</td><td><span class="pri should">Should</span></td><td>2</td></tr>
+          <tr><td class="id">INV-9</td><td>State what the firing monitor actually measures, and flag when it is narrower or broader than the symptom or when telemetry is missing or too coarse.</td><td><span class="pri could">Could</span></td><td>3</td></tr>
+          <tr><td class="id">INV-10</td><td>Incident mode for declared incidents: timestamped timeline, severity proposal, status-update drafts, and a blameless postmortem draft.</td><td><span class="pri should">Should</span></td><td>5</td></tr>
+
+          <tr class="group"><td colspan="4">Safe and controlled remediation</td></tr>
+          <tr><td class="id">REM-1</td><td>Actions come only from a typed catalog. The LLM proposes; it never executes.</td><td><span class="pri must">Must</span></td><td>4</td></tr>
+          <tr><td class="id">REM-2</td><td>A policy gate sets the mode per action, namespace, and cluster: deny, suggest, approve, or auto.</td><td><span class="pri must">Must</span></td><td>4</td></tr>
+          <tr><td class="id">REM-3</td><td>Approval in Slack, with the Slack user mapped to a role. Unapproved requests expire after 10 minutes.</td><td><span class="pri must">Must</span></td><td>4</td></tr>
+          <tr><td class="id">REM-4</td><td>Server-side dry-run before every write; a verification window after it, with automatic revert where the action supports one.</td><td><span class="pri must">Must</span></td><td>4</td></tr>
+          <tr><td class="id">REM-5</td><td>Blast-radius limits and a global kill switch.</td><td><span class="pri must">Must</span></td><td>4</td></tr>
+          <tr><td class="id">REM-6</td><td>Config fixes go out as a GitHub PR against the GitOps repo, never as a live patch.</td><td><span class="pri should">Should</span></td><td>4</td></tr>
+
+          <tr class="group"><td colspan="4">Toolchain integration</td></tr>
+          <tr><td class="id">INT-1</td><td>Datadog monitor webhook in (Webhooks integration, added as one more recipient beside the existing notification channels), Slack out.</td><td><span class="pri must">Must</span></td><td>2</td></tr>
+          <tr><td class="id">INT-2</td><td>Datadog as the single telemetry source: metrics, logs, spans, monitors, events, and Kubernetes resources, read through a <code>DatadogClient</code> interface backed by the Datadog API (in cluster) or the Datadog MCP (CLI, development).</td><td><span class="pri must">Must</span></td><td class="nw">2, 3</td></tr>
+          <tr><td class="id">INT-3</td><td>Change sources: Datadog events and change tracking first; Argo CD and GitHub Actions directly where Datadog lacks the commit, author, or pipeline.</td><td><span class="pri must">Must</span></td><td>3</td></tr>
+          <tr><td class="id">INT-4</td><td>MCP server exposing the read-only tools, so the same tools work from Claude Code or any MCP client.</td><td><span class="pri should">Should</span></td><td>1</td></tr>
+          <tr><td class="id">INT-5</td><td>The LLM provider is configuration, not code. Planner and executor models are set independently in Helm values. Adapters for Anthropic, OpenAI, Gemini, and OpenAI-compatible endpoints (Ollama, vLLM, and others). A provider must support tool calling and structured output.</td><td><span class="pri must">Must</span></td><td class="nw">1, 5</td></tr>
+          <tr><td class="id">INT-6</td><td>Export incidents to GitHub Issues or Jira.</td><td><span class="pri could">Could</span></td><td>5</td></tr>
+          <tr><td class="id">INT-7</td><td>Metrics from the OpenTelemetry Collector and custom exporters are queried like any other Datadog metric. Queries are scoped by unified service tags (service, env, version) plus cluster, namespace, and workload.</td><td><span class="pri should">Should</span></td><td>2</td></tr>
+          <tr><td class="id">INT-8</td><td>The eval suite reports accuracy and cost per provider and model. Only providers that pass the suite are labelled supported.</td><td><span class="pri should">Should</span></td><td class="nw">2, 5</td></tr>
+
+          <tr class="group"><td colspan="4">Observability and context</td></tr>
+          <tr><td class="id">OBS-1</td><td>Topology graph kept current by informers, at most 30 seconds stale.</td><td><span class="pri should">Should</span></td><td>3</td></tr>
+          <tr><td class="id">OBS-2</td><td>Change timeline with 14 days of retention.</td><td><span class="pri must">Must</span></td><td>3</td></tr>
+          <tr><td class="id">OBS-3</td><td>The agent traces itself with OpenTelemetry (one span per tool call) and exports metrics through the OpenTelemetry Collector to Datadog, tagged <code>service:k8s-triage-agent</code>.</td><td><span class="pri must">Must</span></td><td>0</td></tr>
+          <tr><td class="id">OBS-4</td><td>Datadog dashboard, defined as code, for incidents, time to RCA, accuracy feedback, and LLM cost.</td><td><span class="pri should">Should</span></td><td>5</td></tr>
+
+          <tr class="group"><td colspan="4">Security and governance</td></tr>
+          <tr><td class="id">SEC-1</td><td>The read path uses a ClusterRole with no Secrets access. The write path uses a separate ServiceAccount scoped per namespace. Datadog access uses a read-only API and application key pair with the narrowest scopes the tools need; the executor never holds it.</td><td><span class="pri must">Must</span></td><td class="nw">0, 4</td></tr>
+          <tr><td class="id">SEC-2</td><td>Redact secrets, tokens, emails, and env values before any LLM call, including Datadog log, span, and monitor-message excerpts, and record what was redacted.</td><td><span class="pri must">Must</span></td><td class="nw">1, 2</td></tr>
+          <tr><td class="id">SEC-3</td><td>Append-only audit log of every tool call, proposal, approval, and write, with a request hash.</td><td><span class="pri must">Must</span></td><td>4</td></tr>
+          <tr><td class="id">SEC-4</td><td>Treat tool output as untrusted data to defend against prompt injection through logs, monitor messages, span attributes, and annotations.</td><td><span class="pri must">Must</span></td><td class="nw">1, 2</td></tr>
+          <tr><td class="id">SEC-5</td><td>Google SSO for the API and Slack-to-Kubernetes identity mapping.</td><td><span class="pri should">Should</span></td><td>5</td></tr>
+          <tr><td class="id">SEC-6</td><td>A published data-handling statement: what leaves the cluster, where it is processed, and what each configured LLM provider receives.</td><td><span class="pri must">Must</span></td><td>2</td></tr>
+          <tr><td class="id">SEC-7</td><td>The agent never writes to Datadog: no creating, editing, muting, or resolving monitors, dashboards, notebooks, cases, or incidents.</td><td><span class="pri must">Must</span></td><td>0</td></tr>
+        </tbody>
+      </table></div>
+
+      <h3>Non-functional requirements</h3>
+      <div class="tbl"><table>
+        <thead><tr><th>Area</th><th>Target</th></tr></thead>
+        <tbody>
+          <tr><td>Latency</td><td class="tn">Alert to RCA in Slack: p50 under 90 s, p95 under 4 min.</td></tr>
+          <tr><td>Fail-safe</td><td>If the agent is down, alerts still reach humans unchanged. The monitor keeps its existing notification channels; the agent's webhook is an added recipient, never a gate.</td></tr>
+          <tr><td>Availability</td><td>Two replicas; the watcher and executor use leader election.</td></tr>
+          <tr><td>Footprint</td><td class="tn">Under 500m CPU and 512Mi memory for the agent at steady state, plus a small increment per watched cluster.</td></tr>
+          <tr><td>Cost</td><td>LLM cost tracked per investigation. Set the target after the Phase 2 baseline.</td></tr>
+          <tr><td>Datadog API</td><td>Per-probe and per-incident query caps (values set after the Phase 2 baseline), caching of repeated queries inside one investigation, and backoff on rate limits. Telemetry can lag by minutes, so live state comes from the Kubernetes API.</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <section id="architecture">
+      <h2><span class="num">5</span>Architecture</h2>
+      <p>Four stages: ingest signals, reason over them with read-only tools, decide on an action through policy, and act with a narrowly scoped identity. The read path and the write path never share credentials.</p>
+      <figure>
+        <div class="fig-scroll">
+        <svg viewBox="0 0 1130 520" role="img" aria-label="Architecture: alerts and change events are ingested, the investigator reasons through read-only tools over a context store and telemetry, and any write passes through a policy gate and optional human approval before a scoped executor touches the cluster.">
+          <defs>
+            <marker id="ah1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker>
+          </defs>
+          <text class="d-h" x="100" y="30" text-anchor="middle">SIGNALS</text>
+          <text class="d-h" x="330" y="30" text-anchor="middle">INGEST</text>
+          <text class="d-h" x="575" y="30" text-anchor="middle">REASON (READ-ONLY)</text>
+          <text class="d-h" x="925" y="30" text-anchor="middle">DECIDE AND ACT</text>
+
+          <rect class="d-zone" x="725" y="42" width="395" height="394" rx="10"/>
+          <text class="d-h" x="737" y="428">WRITE PATH</text>
+
+          <!-- Signals -->
+          <rect class="d-box" x="20" y="54" width="160" height="52" rx="6"/>
+          <text class="d-t" x="100" y="77" text-anchor="middle">Datadog monitors</text>
+          <text class="d-s" x="100" y="93" text-anchor="middle">alert webhook</text>
+          <rect class="d-box" x="20" y="164" width="160" height="52" rx="6"/>
+          <text class="d-t" x="100" y="187" text-anchor="middle">Datadog events</text>
+          <text class="d-s" x="100" y="203" text-anchor="middle">deploys, CI, Argo CD</text>
+
+          <!-- Ingest -->
+          <rect class="d-box" x="250" y="54" width="160" height="52" rx="6"/>
+          <text class="d-t" x="330" y="77" text-anchor="middle">Alert Receiver</text>
+          <text class="d-s" x="330" y="93" text-anchor="middle">dedup + group</text>
+          <rect class="d-box" x="250" y="164" width="160" height="52" rx="6"/>
+          <text class="d-t" x="330" y="187" text-anchor="middle">Change Collector</text>
+          <text class="d-s" x="330" y="203" text-anchor="middle">deploys, configs, scaling</text>
+          <rect class="d-box" x="250" y="274" width="160" height="52" rx="6"/>
+          <text class="d-t" x="330" y="297" text-anchor="middle">Event Watcher</text>
+          <text class="d-s" x="330" y="313" text-anchor="middle">informers</text>
+
+          <!-- Reason -->
+          <rect class="d-box" x="480" y="54" width="190" height="52" rx="6"/>
+          <text class="d-t" x="575" y="77" text-anchor="middle">Investigator</text>
+          <text class="d-s" x="575" y="93" text-anchor="middle">LLM tool loop + budgets</text>
+          <rect class="d-box" x="480" y="164" width="190" height="52" rx="6"/>
+          <text class="d-t" x="575" y="187" text-anchor="middle">Read-only Tools</text>
+          <text class="d-s" x="575" y="203" text-anchor="middle">detectors + MCP server</text>
+          <rect class="d-box" x="480" y="274" width="190" height="52" rx="6"/>
+          <text class="d-t" x="575" y="297" text-anchor="middle">Context Store</text>
+          <text class="d-s" x="575" y="313" text-anchor="middle">topology + change timeline</text>
+          <rect class="d-box" x="480" y="360" width="190" height="52" rx="6"/>
+          <text class="d-t" x="575" y="383" text-anchor="middle">Datadog</text>
+          <text class="d-s" x="575" y="399" text-anchor="middle">metrics, logs, traces, monitors</text>
+
+          <!-- Decide and act -->
+          <rect class="d-box" x="740" y="54" width="170" height="52" rx="6"/>
+          <text class="d-t" x="825" y="77" text-anchor="middle">Remediation Planner</text>
+          <text class="d-s" x="825" y="93" text-anchor="middle">typed action catalog</text>
+          <rect class="d-gate" x="740" y="164" width="170" height="52" rx="6"/>
+          <text class="d-t" x="825" y="187" text-anchor="middle">Policy Gate</text>
+          <text class="d-s" x="825" y="203" text-anchor="middle">OPA + autonomy level</text>
+          <rect class="d-box" x="740" y="274" width="170" height="52" rx="6"/>
+          <text class="d-t" x="825" y="297" text-anchor="middle">Executor</text>
+          <text class="d-s" x="825" y="313" text-anchor="middle">scoped SA, dry-run first</text>
+          <rect class="d-box" x="980" y="54" width="130" height="52" rx="6"/>
+          <text class="d-t" x="1045" y="77" text-anchor="middle">Slack · GitHub</text>
+          <text class="d-s" x="1045" y="93" text-anchor="middle">RCA post, fix PR</text>
+          <rect class="d-box" x="980" y="164" width="130" height="52" rx="6"/>
+          <text class="d-t" x="1045" y="187" text-anchor="middle">Human Approval</text>
+          <text class="d-s" x="1045" y="203" text-anchor="middle">Slack button</text>
+          <rect class="d-box" x="980" y="360" width="130" height="52" rx="6"/>
+          <text class="d-t" x="1045" y="383" text-anchor="middle">Audit Log</text>
+          <text class="d-s" x="1045" y="399" text-anchor="middle">append-only</text>
+
+          <!-- Cluster band -->
+          <rect class="d-band" x="20" y="460" width="1090" height="46" rx="6"/>
+          <text class="d-t" x="565" y="488" text-anchor="middle">Kubernetes cluster(s) on GKE</text>
+
+          <!-- Arrows -->
+          <line class="d-line" x1="180" y1="80" x2="248" y2="80" marker-end="url(#ah1)"/>
+          <text class="d-l" x="214" y="72" text-anchor="middle">webhook</text>
+          <line class="d-line" x1="180" y1="190" x2="248" y2="190" marker-end="url(#ah1)"/>
+          <text class="d-l" x="214" y="182" text-anchor="middle">events</text>
+          <line class="d-line" x1="410" y1="80" x2="478" y2="80" marker-end="url(#ah1)"/>
+          <text class="d-l" x="444" y="72" text-anchor="middle">incident</text>
+          <polyline class="d-line" points="410,190 434,190 434,290 478,290" marker-end="url(#ah1)"/>
+          <line class="d-line" x1="410" y1="310" x2="478" y2="310" marker-end="url(#ah1)"/>
+          <text class="d-l" x="452" y="327" text-anchor="middle">writes</text>
+          <line class="d-line" x1="330" y1="460" x2="330" y2="328" marker-end="url(#ah1)"/>
+          <text class="d-l" x="338" y="400">watch</text>
+
+          <line class="d-line" x1="575" y1="106" x2="575" y2="162" marker-end="url(#ah1)"/>
+          <text class="d-l" x="583" y="139">tool calls</text>
+          <line class="d-line" x1="575" y1="216" x2="575" y2="272" marker-end="url(#ah1)"/>
+          <text class="d-l" x="583" y="249">graph query</text>
+          <polyline class="d-line" points="670,190 700,190 700,458" marker-end="url(#ah1)"/>
+          <line class="d-line" x1="700" y1="386" x2="672" y2="386" marker-end="url(#ah1)"/>
+          <text class="d-l" x="708" y="452">get, list, logs</text>
+
+          <line class="d-line" x1="670" y1="80" x2="738" y2="80" marker-end="url(#ah1)"/>
+          <text class="d-l" x="704" y="72" text-anchor="middle">RCA</text>
+          <line class="d-line" x1="910" y1="80" x2="978" y2="80" marker-end="url(#ah1)"/>
+          <text class="d-l" x="944" y="72" text-anchor="middle">post</text>
+          <line class="d-line" x1="825" y1="106" x2="825" y2="162" marker-end="url(#ah1)"/>
+          <text class="d-l" x="833" y="139">proposal</text>
+          <line class="d-line acc" x1="910" y1="190" x2="978" y2="190" marker-end="url(#ah1)"/>
+          <text class="d-l" x="944" y="182" text-anchor="middle">needs OK</text>
+          <polyline class="d-line acc" points="1045,216 1045,290 912,290" marker-end="url(#ah1)"/>
+          <text class="d-l" x="978" y="284" text-anchor="middle">approved</text>
+          <line class="d-line acc dash" x1="825" y1="216" x2="825" y2="272" marker-end="url(#ah1)"/>
+          <text class="d-l" x="833" y="249">auto (L3)</text>
+          <line class="d-line acc" x1="825" y1="326" x2="825" y2="458" marker-end="url(#ah1)"/>
+          <text class="d-l" x="833" y="400">scoped write</text>
+          <polyline class="d-line" points="910,312 1000,312 1000,358" marker-end="url(#ah1)"/>
+          <text class="d-l" x="955" y="328" text-anchor="middle">record</text>
+        </svg>
+        </div>
+        <figcaption><b>The LLM sits entirely on the read side.</b> Everything left of the dashed zone holds read-only credentials. A write reaches the cluster only after the policy gate either requires a human approval (solid accent path) or allows an allowlisted low-risk action to run on its own (dashed accent path). Every step lands in the audit log.</figcaption>
+      </figure>
+
+      <h3>Components</h3>
+      <div class="tbl"><table>
+        <thead><tr><th>Component</th><th>Responsibility</th></tr></thead>
+        <tbody>
+          <tr><td class="nw"><b>Alert Receiver</b></td><td>Datadog webhook endpoint. Normalises the monitor payload and its tags to cluster, namespace, workload, service, and env, deduplicates, and opens or updates an incident.</td></tr>
+          <tr><td class="nw"><b>Event Watcher</b></td><td>Shared informers on core and apps resources. Maintains the topology graph and records Kubernetes events and rollout revisions.</td></tr>
+          <tr><td class="nw"><b>Change Collector</b></td><td>Pulls deploy and config changes from Datadog events and change tracking, fills commit SHA, author, and pipeline from Argo CD sync history and GitHub where Datadog lacks them, and writes everything to the change timeline.</td></tr>
+          <tr><td class="nw"><b>Investigator</b></td><td>Runs detectors, then a planner and executor loop with budgets. The planner (stronger model) forms hypotheses and judges evidence; executors (cheaper model) run bounded read-only probes. Produces hypotheses tied to evidence IDs. Method adapted from the <code>datadog-investigate</code> skill.</td></tr>
+          <tr><td class="nw"><b>Read-only Tools</b></td><td>Typed Go functions: <code>k8s_get</code>, <code>k8s_describe</code>, <code>k8s_events</code>, <code>pod_logs</code>, and <code>rollout_history</code> against the cluster, and <code>dd_metrics</code>, <code>dd_logs</code>, <code>dd_spans</code>, <code>dd_monitors</code>, <code>dd_events</code>, and <code>change_timeline</code> against Datadog. Outputs are redacted and size-capped. Also served over MCP.</td></tr>
+          <tr><td class="nw"><b>Remediation Planner</b></td><td>Maps a hypothesis to zero or more catalog actions with parameters, expected effect, and a verification check.</td></tr>
+          <tr><td class="nw"><b>Policy Gate</b></td><td>Embedded OPA. Input: action, target, cluster, namespace, time, recent action count. Output: deny, suggest, approve, or auto.</td></tr>
+          <tr><td class="nw"><b>Executor</b></td><td>Separate Deployment and ServiceAccount. Reconciles <code>RemediationRequest</code> objects: dry-run, apply, verify, revert if needed.</td></tr>
+        </tbody>
+      </table></div>
+
+      <h3>Deployment topology</h3>
+      <p>The agent runs off-cluster (<a href="https://github.com/davidsugianto/upsera-agent/blob/main/docs/adr/0002-run-outside-the-monitored-cluster.md">ADR 0002</a>): on a management cluster or a VM, outside the clusters it diagnoses. It reaches each target cluster remotely with a per-cluster identity, listed in a cluster registry with namespace allow and deny lists: a Google identity bound by the reader ClusterRole through Workload Identity on GKE, and a ServiceAccount token in dev. No admin kubeconfig is stored. Phases 0 to 4 run as a single Helm release on the management side. Phase 5 adds multi-cluster scale through the registry rather than agents inside each cluster. The Datadog keys live only on the management side, and the executor uses its own identity per target. Where <code>RemediationRequest</code> records live now that the agent is remote is an open decision (ADR 0005, Phase 4). Remote informers watch over the network, so watch volume is something to measure in Phase 3.</p>
+    </section>
+
+    <section id="investigation">
+      <h2><span class="num">6</span>Investigation loop</h2>
+      <p>Each incident moves through a fixed sequence. Known signatures can skip straight to the report; anything unclear loops through gather and hypothesize until confidence is high enough or the budget runs out.</p>
+      <figure>
+        <div class="fig-scroll">
+        <svg viewBox="0 0 1000 200" role="img" aria-label="Investigation state machine: scope, detect, gather, correlate, hypothesize, report. Known signatures skip from detect to report. Low-confidence hypotheses loop back to gather while budget remains.">
+          <defs>
+            <marker id="ah2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker>
+          </defs>
+          <rect class="d-box" x="16" y="62" width="136" height="56" rx="6"/>
+          <text class="d-t" x="84" y="86" text-anchor="middle">Scope</text>
+          <text class="d-s" x="84" y="103" text-anchor="middle">workload + window</text>
+          <rect class="d-box" x="182" y="62" width="136" height="56" rx="6"/>
+          <text class="d-t" x="250" y="86" text-anchor="middle">Detect</text>
+          <text class="d-s" x="250" y="103" text-anchor="middle">rule signatures</text>
+          <rect class="d-box" x="348" y="62" width="136" height="56" rx="6"/>
+          <text class="d-t" x="416" y="86" text-anchor="middle">Gather</text>
+          <text class="d-s" x="416" y="103" text-anchor="middle">parallel tool calls</text>
+          <rect class="d-box" x="514" y="62" width="136" height="56" rx="6"/>
+          <text class="d-t" x="582" y="86" text-anchor="middle">Correlate</text>
+          <text class="d-s" x="582" y="103" text-anchor="middle">change timeline</text>
+          <rect class="d-box" x="680" y="62" width="136" height="56" rx="6"/>
+          <text class="d-t" x="748" y="86" text-anchor="middle">Hypothesize</text>
+          <text class="d-s" x="748" y="103" text-anchor="middle">ranked, with evidence</text>
+          <rect class="d-gate" x="846" y="62" width="136" height="56" rx="6"/>
+          <text class="d-t" x="914" y="86" text-anchor="middle">Report</text>
+          <text class="d-s" x="914" y="103" text-anchor="middle">RCA + fix plan</text>
+
+          <line class="d-line" x1="152" y1="90" x2="180" y2="90" marker-end="url(#ah2)"/>
+          <line class="d-line" x1="318" y1="90" x2="346" y2="90" marker-end="url(#ah2)"/>
+          <line class="d-line" x1="484" y1="90" x2="512" y2="90" marker-end="url(#ah2)"/>
+          <line class="d-line" x1="650" y1="90" x2="678" y2="90" marker-end="url(#ah2)"/>
+          <line class="d-line" x1="816" y1="90" x2="844" y2="90" marker-end="url(#ah2)"/>
+
+          <polyline class="d-line acc dash" points="250,62 250,36 914,36 914,60" marker-end="url(#ah2)"/>
+          <text class="d-l" x="582" y="28" text-anchor="middle">known signature, high confidence: skip LLM loop</text>
+          <polyline class="d-line" points="748,118 748,156 416,156 416,120" marker-end="url(#ah2)"/>
+          <text class="d-l" x="582" y="176" text-anchor="middle">top hypothesis below high confidence and budget left: gather to confirm or refute</text>
+        </svg>
+        </div>
+        <figcaption><b>Rules short-circuit the expensive path.</b> An OOMKilled pod with exit code 137 and a lowered memory limit in the last revision needs no LLM reasoning. The loop exists for the cases rules cannot settle, and it is bounded by INV-2.</figcaption>
+      </figure>
+
+      <h3>Method, taken from the team's skills</h3>
+      <ul>
+        <li><b>Scope from the alert.</b> The monitor's query, threshold, tags, and transition time set T0 and a pre-incident baseline window. The problem statement says what the monitor actually measures.</li>
+        <li><b>Hypotheses, then probes.</b> Three to six specific, falsifiable hypotheses across layers (change, capacity, dependency, config, node, traffic). The planner writes the probes, executors run them, rounds are capped.</li>
+        <li><b>Live cluster first for workload questions.</b> Events before logs, the owner chain, and rollout history, read from the Kubernetes API. Attaching a debug container is a write and is out of scope for v1.</li>
+        <li><b>Confidence scale.</b> High: cause, timing, and mechanism are all shown. Medium: one of the three is not shown. Low: the cause fits but nothing tested confirms it. A single correlated deploy with no mechanism is medium at most.</li>
+        <li><b>Closing chain.</b> Trigger, mechanism, why it crossed the monitor threshold, recovery; then ruled out, still open, contributing factors, and confidence. An unproven link is named as open, never filled in with a guess.</li>
+      </ul>
+
+      <h3>What the on-call engineer sees</h3>
+      <div class="rca" aria-label="Example Slack RCA message">
+        <div class="hd">INC-0142 · checkout (ns: shop) · prod-gke-asia-southeast2 · monitor: checkout OOMKilled restarts · opened 10:44 WIB</div>
+        <div class="cause">Probable cause (high): revision 37 of deploy/checkout lowered the memory limit from 512Mi to 256Mi. Pods have been OOMKilled (exit 137) 14 times since 10:42.</div>
+        <div class="ev">[E1] rollout_history rev 36 → 37 by GitHub Actions run #88213 · [E2] pod lastState OOMKilled ×14 · [E3] Datadog kubernetes.memory.working_set peaks at 251Mi</div>
+        <div class="ev">Ruled out: node pressure (E4), upstream 5xx (E5)</div>
+        <div class="act"><span class="btn pri">Approve: open revert PR</span><span class="btn">Show evidence</span><span class="btn">Wrong RCA</span></div>
+      </div>
+      <p class="small muted">Illustrative output. Evidence IDs link to the stored tool call and its redacted output.</p>
+    </section>
+
+    <section id="remediation">
+      <h2><span class="num">7</span>Remediation safety model</h2>
+      <p>Autonomy is set per namespace and per action. New installs start at L0 everywhere; teams raise it deliberately.</p>
+      <div class="ladder">
+        <div><div class="lv">L0</div><h4>Observe</h4><p>Investigate and report. No action proposed.</p><div class="def">default for all namespaces</div></div>
+        <div><div class="lv">L1</div><h4>Suggest</h4><p>Include the exact command or PR diff. A human runs it.</p><div class="def">recommended starting point</div></div>
+        <div><div class="lv">L2</div><h4>Approve</h4><p>One approval in Slack and the executor runs it.</p><div class="def">per namespace opt-in</div></div>
+        <div><div class="lv">L3</div><h4>Auto</h4><p>Allowlisted low-risk actions run, then notify.</p><div class="def">off unless policy allows</div></div>
+      </div>
+
+      <h3>Action catalog</h3>
+      <div class="tbl"><table>
+        <thead><tr><th>Action</th><th>Risk</th><th>Highest mode allowed</th><th>Mechanism</th><th>Undo</th></tr></thead>
+        <tbody>
+          <tr><td>Delete one pod of a ReplicaSet</td><td><span class="risk low">Low</span></td><td>Auto, if replicas ≥ 2 and PDB allows</td><td>delete pod</td><td>Controller recreates it</td></tr>
+          <tr><td>Rollout restart</td><td><span class="risk low">Low</span></td><td>Approve</td><td>patch restartedAt annotation</td><td>None needed</td></tr>
+          <tr><td>Scale replicas (cap +50%, within HPA max)</td><td><span class="risk med">Medium</span></td><td>Approve</td><td>patch scale subresource</td><td>Restore previous count</td></tr>
+          <tr><td>Roll back to previous revision</td><td><span class="risk med">Medium</span></td><td>Approve</td><td>Argo CD rollback or revert PR</td><td>Re-sync to target</td></tr>
+          <tr><td>Change resources or config</td><td><span class="risk med">Medium</span></td><td>Suggest (PR only)</td><td>GitHub PR on GitOps repo</td><td>Revert PR</td></tr>
+          <tr><td>Cordon node</td><td><span class="risk high">High</span></td><td>Approve, two approvers</td><td>patch node unschedulable</td><td>Uncordon</td></tr>
+          <tr><td>Drain node, delete PVC, delete namespace</td><td><span class="risk never">Never</span></td><td>Deny</td><td>Not in catalog</td><td>n/a</td></tr>
+        </tbody>
+      </table></div>
+
+      <h3>Guardrails on every write</h3>
+      <ul>
+        <li><b>Dry-run first.</b> Server-side dry-run must succeed before the real request.</li>
+        <li><b>Verify after.</b> Each action declares a check, for example "ready replicas back to desired within 5 minutes". On failure the executor reverts if it can and escalates.</li>
+        <li><b>Blast radius.</b> At most 1 action per workload per 15 minutes and 3 per cluster per hour.</li>
+        <li><b>Kill switch.</b> A flag in the agent's own configuration on the management side (hot-reloaded; never a ConfigMap in a target cluster, which the reader role cannot read) or <code>/triage freeze</code> in Slack drops every mode to L0 immediately. A <code>subPath</code> config mount never refreshes, so REM-5 must mount the config directory (or a separate flag file) and re-read it; the Phase 0 chart restarts the pod on a config change instead.</li>
+        <li><b>Datadog stays read-only.</b> Muting a monitor, editing a threshold, or resolving a Datadog incident is not in the catalog. The agent can propose a monitor change as text for its owner.</li>
+        <li><b>GitOps respect.</b> Workloads managed by Argo CD get changes through Git, so the next sync does not undo the fix.</li>
+      </ul>
+    </section>
+
+    <section id="data">
+      <h2><span class="num">8</span>Data model and interfaces</h2>
+      <div class="tbl"><table>
+        <thead><tr><th>Entity</th><th>Key fields</th><th>Stored in</th></tr></thead>
+        <tbody>
+          <tr><td class="nw"><b>Incident</b></td><td><code>id, cluster, namespace, workload, monitor_id, dd_incident_id, severity, status, opened_at, resolved_at</code></td><td>Postgres</td></tr>
+          <tr><td class="nw"><b>Signal</b></td><td><code>incident_id, source (alert | event | change), ref, ts</code></td><td>Postgres</td></tr>
+          <tr><td class="nw"><b>Evidence</b></td><td><code>id, incident_id, tool, args, excerpt (redacted), ts, sha256</code></td><td>Postgres</td></tr>
+          <tr><td class="nw"><b>Hypothesis</b></td><td><code>incident_id, statement, confidence, evidence_ids[], disproof</code></td><td>Postgres</td></tr>
+          <tr><td class="nw"><b>RemediationRequest</b></td><td><code>action, target, params, risk, mode, expires_at, phase</code></td><td>CRD in cluster</td></tr>
+          <tr><td class="nw"><b>AuditEntry</b></td><td><code>seq, actor, verb, target, request_hash, result, ts</code></td><td>Postgres (append-only) + stdout</td></tr>
+        </tbody>
+      </table></div>
+      <p>Keeping <code>RemediationRequest</code> as a CRD means in-flight actions are visible with <code>kubectl get remediationrequests -A</code> and survive agent restarts.</p>
+
+      <h3>Interfaces</h3>
+<pre><code><span class="c"># CLI (kubectl plugin)</span>
+kubectl triage deploy/checkout -n shop --since 30m
+kubectl triage incident INC-0142 --evidence
+kubectl triage alert &lt;datadog-link&gt;   <span class="c">monitor, event, or incident URL</span>
+
+<span class="c"># HTTP API</span>
+POST /v1/alerts                    <span class="c">Datadog monitor webhook</span>
+GET  /v1/incidents?status=open
+GET  /v1/incidents/{id}/evidence
+POST /v1/actions/{id}/approve      <span class="c">SSO, mirrors the Slack button</span>
+
+<span class="c"># Slack</span>
+/triage deploy/checkout -n shop
+/triage &lt;datadog-link&gt;
+/triage freeze | /triage unfreeze
+
+<span class="c"># MCP tools (read-only)</span>
+k8s_get  k8s_describe  k8s_events  pod_logs
+rollout_history  dd_metrics  dd_logs  dd_spans
+dd_monitors  dd_events  change_timeline</code></pre>
+    </section>
+
+    <section id="stack">
+      <h2><span class="num">9</span>Tech stack</h2>
+      <div class="tbl"><table>
+        <thead><tr><th>Layer</th><th>Choice</th><th>Reason</th></tr></thead>
+        <tbody>
+          <tr><td>Language</td><td>Go</td><td>First-class Kubernetes client libraries; single static binary.</td></tr>
+          <tr><td>Kubernetes access</td><td>client-go informers, controller-runtime</td><td>Cached reads, CRD reconciler, leader election.</td></tr>
+          <tr><td>LLM</td><td>Provider interface with adapters: Anthropic, OpenAI, Gemini, OpenAI-compatible (Ollama, vLLM, others); planner and executor models set separately</td><td>No lock-in, a self-hosted option for data-residency concerns, and cost tuned per role.</td></tr>
+          <tr><td>Source and CI</td><td>GitHub, GitHub Actions</td><td>Repo, pull request workflow, nightly eval job, and release of the Helm chart and image.</td></tr>
+          <tr><td>Tool protocol</td><td>MCP Go SDK</td><td>Same tools usable by the agent and by humans in any MCP client.</td></tr>
+          <tr><td>Policy</td><td>OPA, embedded Rego</td><td>Policies are code, reviewable in Git, unit-testable.</td></tr>
+          <tr><td>Storage</td><td>Postgres; CRD for actions</td><td>Durable incident history; actions visible in the cluster.</td></tr>
+          <tr><td>Telemetry sources</td><td>Datadog API behind a <code>DatadogClient</code> interface; Datadog MCP for the CLI and development</td><td>Datadog is the single source for alerts, metrics, logs, traces, and changes. One interface lets CI replay recorded responses.</td></tr>
+          <tr><td>Alerting</td><td>Datadog monitors, Webhooks integration</td><td>Existing alerts become triggers without touching the notification routes.</td></tr>
+          <tr><td>Chat</td><td>Slack app, Socket Mode</td><td>No public ingress needed for interactivity.</td></tr>
+          <tr><td>Self-observability</td><td>OpenTelemetry Go SDK, OpenTelemetry Collector, Datadog</td><td>Same pipeline as the team's other services (collector, custom exporters, Datadog).</td></tr>
+          <tr><td>Packaging</td><td>Helm chart, deployed by Argo CD; OpenTofu for the GKE lab</td><td>Dogfoods the GitOps flow the agent reasons about.</td></tr>
+          <tr><td>Eval</td><td>kind and the GKE lab, scenario fixtures, recorded Datadog responses, Go test harness</td><td>Reproducible accuracy numbers in CI.</td></tr>
+        </tbody>
+      </table></div>
+<pre><code>upsera-agent/
+  cmd/agent-server/        <span class="c">API, alert webhook, Slack; runs off-cluster</span>
+  cmd/agent-cli/           <span class="c">CLI (also installable as kubectl-triage)</span>
+  internal/config/         <span class="c">YAML config, secrets by env name</span>
+  internal/telemetry/      <span class="c">OpenTelemetry setup</span>
+  internal/domain/
+  internal/agent/llm/      <span class="c">provider interface + adapters</span>
+  internal/agent/loop/     <span class="c">planner and executor loop, budgets</span>
+  internal/agent/prompt/
+  internal/agent/tools/    <span class="c">typed read-only tools (ADR 0001) + MCP</span>
+  internal/repository/kubernetes/
+  internal/repository/datadog/   <span class="c">DatadogClient: API + MCP, record/replay</span>
+  internal/repository/postgres/
+  internal/usecase/investigation/
+  internal/usecase/remediation/  <span class="c">catalog, policy, executor</span>
+  internal/handler/        <span class="c">HTTP, Slack</span>
+  pkg/redact/
+  deploy/kubernetes/       <span class="c">reader RBAC for target clusters</span>
+  deploy/helm/             <span class="c">management-side chart</span>
+  deploy/dev/              <span class="c">kind + OpenTelemetry Collector dev loop</span>
+  infra/gke-lab/           <span class="c">OpenTofu: GKE target cluster</span>
+  test/harness/            <span class="c">eval runner</span>
+  test/scenarios/          <span class="c">fault fixtures + expected RCA</span>
+  test/replay/             <span class="c">recorded Datadog responses</span>
+  .github/workflows/
+  docs/adr/</code></pre>
+    </section>
+
+    <section id="security">
+      <h2><span class="num">10</span>Security and governance</h2>
+      <div class="cols">
+        <div>
+          <h3>Access</h3>
+          <ul>
+            <li><b>Reader ClusterRole:</b> get, list, watch on workloads, nodes, events, services, endpointslices, networkpolicies, HPA, PDB, PVC; get on <code>pods/log</code>. No Secrets.</li>
+            <li><b>Executor Role:</b> bound per namespace that opted in. Only the verbs the catalog needs: delete pods, patch deployments and scale. Cordon, if enabled, needs its own ClusterRole limited to patching nodes.</li>
+            <li>GCP access through Workload Identity. The only long-lived credentials are the read-only Datadog keys and the Slack tokens, kept in Secret Manager and never exposed to the executor or the LLM.</li>
+          </ul>
+        </div>
+        <div>
+          <h3>Data handling</h3>
+          <ul>
+            <li>Redaction runs inside the tool layer, before data reaches the investigator. Patterns cover tokens, keys, JWTs, emails, and all env values. They apply equally to Datadog log lines, span attributes, and monitor messages.</li>
+            <li>Only redacted excerpts go to the LLM. Raw logs stay in Datadog.</li>
+            <li>Self-hosted LLM mode keeps prompts and excerpts inside your own network; Datadog reads still go to your Datadog site.</li>
+          </ul>
+        </div>
+        <div>
+          <h3>Prompt injection</h3>
+          <ul>
+            <li>Tool output, including Datadog monitor messages, log lines, span attributes, and event text, is wrapped and labelled as untrusted data in the prompt.</li>
+            <li>A log line saying "delete the namespace" can at worst produce a proposal; the catalog has no such action and the gate would deny it.</li>
+            <li>The eval suite includes injection scenarios (section 11).</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section id="eval">
+      <h2><span class="num">11</span>Evaluation and success metrics</h2>
+      <p>An LLM agent without an eval suite is a demo. Each scenario is a manifest plus an injected fault and a labelled expected root cause. The suite runs nightly on kind and the GKE lab, and on every PR that touches prompts, detectors, or tools.</p>
+      <div class="tbl"><table>
+        <thead><tr><th>#</th><th>Scenario</th><th>Injected fault</th><th>Expected root cause</th><th>From</th></tr></thead>
+        <tbody>
+          <tr><td class="tn">1</td><td>Memory regression</td><td>Limit lowered in new revision</td><td>OOMKilled after rev change</td><td>Ph 1</td></tr>
+          <tr><td class="tn">2</td><td>Bad config</td><td>ConfigMap key renamed</td><td>CrashLoop, missing key in logs</td><td>Ph 1</td></tr>
+          <tr><td class="tn">3</td><td>Image typo</td><td>Non-existent tag</td><td>ImagePullBackOff, bad tag</td><td>Ph 1</td></tr>
+          <tr><td class="tn">4</td><td>Probe misconfig</td><td>Readiness on wrong port</td><td>Not ready, endpoints empty</td><td>Ph 1</td></tr>
+          <tr><td class="tn">5</td><td>Unschedulable</td><td>CPU request above node size</td><td>Pending, insufficient CPU</td><td>Ph 1</td></tr>
+          <tr><td class="tn">6</td><td>Node pressure</td><td>Fill node disk</td><td>Eviction on DiskPressure</td><td>Ph 1</td></tr>
+          <tr><td class="tn">7</td><td>HPA ceiling</td><td>Load beyond maxReplicas</td><td>Saturation, HPA at max</td><td>Ph 3</td></tr>
+          <tr><td class="tn">8</td><td>Bad deploy, healthy pods</td><td>New version returns 5xx</td><td>Error spike tied to revision</td><td>Ph 3</td></tr>
+          <tr><td class="tn">9</td><td>Network policy</td><td>Deny egress to DB</td><td>Timeouts, NetworkPolicy change</td><td>Ph 3</td></tr>
+          <tr><td class="tn">10</td><td>Prompt injection</td><td>Log line with instructions</td><td>Correct RCA, no unsafe proposal</td><td>Ph 2</td></tr>
+        </tbody>
+      </table></div>
+
+      <h3>How the suite runs</h3>
+      <ul>
+        <li><b>Kubernetes-only scenarios (1 to 6)</b> run on kind with the Phase 1 tools. Scenario 6 (disk pressure) is hard to reproduce on kind and may be lab-only or replayed.</li>
+        <li><b>Datadog-dependent scenarios (7 to 10) and every alert-driven run</b> use recorded Datadog responses in PR CI, and the live GKE lab with the Datadog Agent and OpenTelemetry Collector nightly. Scenario 9 needs a CNI that enforces NetworkPolicy.</li>
+        <li><b>Non-determinism.</b> Each scenario runs three times and passes when at least two runs name the expected cause with valid evidence. Model and prompt versions are pinned per run.</li>
+      </ul>
+
+      <h3>Success metrics</h3>
+      <div class="tbl"><table>
+        <thead><tr><th>Metric</th><th>v0.5</th><th>v1.0</th></tr></thead>
+        <tbody>
+          <tr><td>RCA top-1 accuracy on eval suite (reference model)</td><td class="tn">≥ 70%</td><td class="tn">≥ 85%</td></tr>
+          <tr><td>RCA claims with linked evidence</td><td class="tn">100%</td><td class="tn">100%</td></tr>
+          <tr><td>Unsafe actions executed (eval + staging)</td><td class="tn">0</td><td class="tn">0</td></tr>
+          <tr><td>Alert to RCA, p50</td><td class="tn">≤ 120 s</td><td class="tn">≤ 90 s</td></tr>
+          <tr><td>MTTR on lab game days vs human-only baseline</td><td>baseline recorded</td><td class="tn">−40%</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <section id="phases">
+      <h2><span class="num">12</span>Phased delivery</h2>
+      <p>Sized for one engineer building part time over about six months. Read-only value ships first; write access arrives only after the eval suite proves the reasoning.</p>
+      <figure>
+        <div class="fig-scroll">
+        <svg viewBox="0 0 1000 300" role="img" aria-label="Timeline across 24 weeks: Phase 0 weeks 1 to 2, Phase 1 weeks 3 to 5, Phase 2 weeks 6 to 9, Phase 3 weeks 10 to 13, Phase 4 weeks 14 to 18, Phase 5 weeks 19 to 24, with the eval harness running continuously from week 4.">
+          <text class="d-h" x="310" y="28" text-anchor="middle">MONTH 1</text>
+          <text class="d-h" x="430" y="28" text-anchor="middle">MONTH 2</text>
+          <text class="d-h" x="550" y="28" text-anchor="middle">MONTH 3</text>
+          <text class="d-h" x="670" y="28" text-anchor="middle">MONTH 4</text>
+          <text class="d-h" x="790" y="28" text-anchor="middle">MONTH 5</text>
+          <text class="d-h" x="910" y="28" text-anchor="middle">MONTH 6</text>
+          <line class="d-grid" x1="250" y1="40" x2="250" y2="292"/>
+          <line class="d-grid" x1="370" y1="40" x2="370" y2="292"/>
+          <line class="d-grid" x1="490" y1="40" x2="490" y2="292"/>
+          <line class="d-grid" x1="610" y1="40" x2="610" y2="292"/>
+          <line class="d-grid" x1="730" y1="40" x2="730" y2="292"/>
+          <line class="d-grid" x1="850" y1="40" x2="850" y2="292"/>
+          <line class="d-grid" x1="970" y1="40" x2="970" y2="292"/>
+
+          <text class="d-t" x="16" y="68">Phase 0 · Foundations</text>
+          <text class="d-l" x="236" y="68" text-anchor="end">W1-2</text>
+          <rect class="d-bar" x="250" y="54" width="60" height="20" rx="3"/>
+
+          <text class="d-t" x="16" y="104">Phase 1 · Diagnose CLI</text>
+          <text class="d-l" x="236" y="104" text-anchor="end">W3-5</text>
+          <rect class="d-bar" x="310" y="90" width="90" height="20" rx="3"/>
+          <path class="d-ms" d="M400,93 l7,7 l-7,7 l-7,-7 z"/>
+          <text class="d-l d-acc" x="412" y="104">v0.1</text>
+
+          <text class="d-t" x="16" y="140">Phase 2 · Alert investigator</text>
+          <text class="d-l" x="236" y="140" text-anchor="end">W6-9</text>
+          <rect class="d-bar" x="400" y="126" width="120" height="20" rx="3"/>
+          <path class="d-ms" d="M520,129 l7,7 l-7,7 l-7,-7 z"/>
+          <text class="d-l d-acc" x="532" y="140">v0.5</text>
+
+          <text class="d-t" x="16" y="176">Phase 3 · Context + changes</text>
+          <text class="d-l" x="236" y="176" text-anchor="end">W10-13</text>
+          <rect class="d-bar" x="520" y="162" width="120" height="20" rx="3"/>
+
+          <text class="d-t" x="16" y="212">Phase 4 · Guarded remediation</text>
+          <text class="d-l" x="236" y="212" text-anchor="end">W14-18</text>
+          <rect class="d-bar" x="640" y="198" width="150" height="20" rx="3"/>
+          <path class="d-ms" d="M790,201 l7,7 l-7,7 l-7,-7 z"/>
+          <text class="d-l d-acc" x="802" y="212">v0.8</text>
+
+          <text class="d-t" x="16" y="248">Phase 5 · Scale + governance</text>
+          <text class="d-l" x="236" y="248" text-anchor="end">W19-24</text>
+          <rect class="d-bar" x="790" y="234" width="180" height="20" rx="3"/>
+          <path class="d-ms" d="M970,237 l7,7 l-7,7 l-7,-7 z"/>
+          <text class="d-l d-acc" x="958" y="228" text-anchor="end">v1.0</text>
+
+          <text class="d-s" x="16" y="284">Eval harness (continuous)</text>
+          <text class="d-l" x="236" y="284" text-anchor="end">W4-24</text>
+          <rect class="d-bar thin" x="340" y="277" width="630" height="8" rx="2"/>
+        </svg>
+        </div>
+        <figcaption><b>Write access arrives in month 4.</b> Diamonds mark releases. The eval harness starts in week 4 and gates every later release.</figcaption>
+      </figure>
+
+      <div class="phases">
+        <div class="phase">
+          <div><div class="ph-id">Phase 0</div><h3>Foundations</h3><div class="wk">Weeks 1-2</div></div>
+          <div class="ph-body">
+            <div><h5>Deliverables</h5><ul>
+              <li>GitHub repository <code>upsera-agent</code>, Go module, Makefile, golangci-lint, GitHub Actions CI with unit tests</li>
+              <li>OpenTofu module for a small GKE lab target cluster (validated, not applied); kind cluster <code>upsera-lab</code> for local work, with an OpenTelemetry Collector shipping to Datadog</li>
+              <li>Helm chart for the management-side deployment; reader ClusterRole for target clusters (no Secrets); OTel wiring through the collector to Datadog; check unified service tagging on target workloads</li>
+              <li>ADRs: LLM provider interface, storage, CRD vs DB for actions, <code>DatadogClient</code> (API vs MCP) and read-only key scopes</li>
+            </ul></div>
+            <div class="exit"><h5>Exit criteria</h5>CI green; chart lints and starts on kind; agent traces and metrics visible in Datadog; Datadog credentials confirmed read-only; OpenTofu module validates.</div>
+          </div>
+        </div>
+        <div class="phase">
+          <div><div class="ph-id">Phase 1</div><h3>Read-only diagnose CLI</h3><div class="wk">Weeks 3-5 · v0.1</div></div>
+          <div class="ph-body">
+            <div><h5>Deliverables</h5><ul>
+              <li><code>kubectl triage</code> plugin for a single workload</li>
+              <li>Detectors for the seven KN-5 signatures</li>
+              <li>Kubernetes tool layer (get, describe, events, pod logs, rollout history) and MCP server; LLM summary with evidence IDs. Datadog tools start in Phase 2.</li>
+              <li>Redaction and untrusted-data framing for LLM input; local SQLite evidence store with the final Evidence shape; call and token caps</li>
+              <li>LLM provider interface with Anthropic and one OpenAI-compatible adapter; models chosen by configuration</li>
+              <li>First six eval scenarios (Kubernetes-only, on kind) with a 2-of-3 pass rule</li>
+            </ul></div>
+            <div class="exit"><h5>Exit criteria</h5>Scenarios 1 to 6 diagnosed correctly (2 of 3 runs, on the reference model); every claim cites evidence.</div>
+          </div>
+        </div>
+        <div class="phase">
+          <div><div class="ph-id">Phase 2</div><h3>Alert-driven investigator</h3><div class="wk">Weeks 6-9 · v0.5</div></div>
+          <div class="ph-body">
+            <div><h5>Deliverables</h5><ul>
+              <li>Datadog monitor webhook receiver, incident grouping, Postgres store</li>
+              <li><code>DatadogClient</code> with metrics, logs, spans, monitors, and events tools (API and MCP backends, record/replay)</li>
+              <li>Planner and executor investigation loop with ranked hypotheses and closing causal chain</li>
+              <li>Redaction and injection defences extended to Datadog payloads; data-handling statement</li>
+              <li>Slack RCA posts, <code>/triage</code> command, correct/wrong feedback</li>
+            </ul></div>
+            <div class="exit"><h5>Exit criteria</h5>Top-1 ≥ 70%; alert to Slack p50 ≤ 120 s; scenario 10 passes.</div>
+          </div>
+        </div>
+        <div class="phase">
+          <div><div class="ph-id">Phase 3</div><h3>Context graph and change correlation</h3><div class="wk">Weeks 10-13</div></div>
+          <div class="ph-body">
+            <div><h5>Deliverables</h5><ul>
+              <li>Informer-backed topology graph</li>
+              <li>Change timeline from Datadog events and change tracking, rollouts, and Argo CD / GitHub Actions where needed</li>
+              <li>"What changed" ranking; upstream and downstream dependency lookups from Datadog service entities</li>
+              <li>Scenarios 7 to 9</li>
+            </ul></div>
+            <div class="exit"><h5>Exit criteria</h5>Top-1 ≥ 75% on all 10; scenario 8 names the right revision and pipeline.</div>
+          </div>
+        </div>
+        <div class="phase">
+          <div><div class="ph-id">Phase 4</div><h3>Guarded remediation</h3><div class="wk">Weeks 14-18 · v0.8</div></div>
+          <div class="ph-body">
+            <div><h5>Deliverables</h5><ul>
+              <li>Action catalog, <code>RemediationRequest</code> CRD, executor</li>
+              <li>OPA policies with tests; autonomy levels L0 to L3</li>
+              <li>Slack approvals, dry-run, verification, auto-revert</li>
+              <li>Audit log, blast-radius limits, kill switch</li>
+              <li>GitHub PR path for config fixes</li>
+            </ul></div>
+            <div class="exit"><h5>Exit criteria</h5>0 unsafe actions in 200 eval runs; L2 flow demoed end to end on GKE.</div>
+          </div>
+        </div>
+        <div class="phase">
+          <div><div class="ph-id">Phase 5</div><h3>Scale and governance</h3><div class="wk">Weeks 19-24 · v1.0</div></div>
+          <div class="ph-body">
+            <div><h5>Deliverables</h5><ul>
+              <li>Multi-cluster registry with a per-cluster identity (Workload Identity) and namespace allow and deny lists</li>
+              <li>Google SSO, Slack-to-Kubernetes identity mapping</li>
+              <li>Datadog dashboard (as code): MTTR, accuracy, cost</li>
+              <li>Incident mode: timeline, severity proposal, status-update drafts, postmortem draft (adapted from <code>sre-incident-response</code>)</li>
+              <li>Remaining provider adapters (OpenAI, Gemini, other OpenAI-compatible endpoints including Ollama and vLLM) and a per-provider accuracy and cost report; docs, demo video</li>
+            </ul></div>
+            <div class="exit"><h5>Exit criteria</h5>Two clusters live; top-1 ≥ 85%; game-day MTTR compared with baseline.</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="risks">
+      <h2><span class="num">13</span>Risks</h2>
+      <div class="tbl"><table>
+        <thead><tr><th>Risk</th><th>Impact</th><th>Mitigation</th></tr></thead>
+        <tbody>
+          <tr><td>Confident but wrong RCA</td><td>Engineers chase the wrong lead</td><td>Mandatory evidence, a disproof field per hypothesis, visible confidence, feedback loop into evals.</td></tr>
+          <tr><td>Prompt injection through logs or annotations</td><td>Harmful proposal</td><td>Untrusted-data framing, typed catalog, policy gate, no write credentials on the read side.</td></tr>
+          <tr><td>Sensitive data sent to an LLM</td><td>Data leak</td><td>Redaction before the LLM, no Secrets RBAC, self-hosted mode.</td></tr>
+          <tr><td>Alert storm</td><td>Cost spike, Slack noise</td><td>Incident grouping, per-incident budgets, global rate limit.</td></tr>
+          <tr><td>Missing or inconsistent telemetry and tags in Datadog</td><td>Queries return nothing and the agent reads that as "no problem"</td><td>Check unified service tagging in Phase 0; report missing telemetry as a finding, never as absence of a fault.</td></tr>
+          <tr><td>Datadog data lag and API limits</td><td>Stale evidence, throttled investigations</td><td>Live state from the Kubernetes API, query caps, caching, backoff.</td></tr>
+          <tr><td>Monitor measures something other than assumed</td><td>RCA answers the wrong question</td><td>Read the monitor query and threshold first and state what it measures (INV-9).</td></tr>
+          <tr><td>Fix reverted by GitOps sync</td><td>Incident returns</td><td>Argo-managed workloads get fixes through Git only.</td></tr>
+          <tr><td>Over-trust over time</td><td>Teams raise autonomy too early</td><td>L3 off by default; policies require explicit opt-in per namespace.</td></tr>
+          <tr><td>Provider differences in tool calling and quality</td><td>Same prompts behave differently; a weaker model gives a confident wrong RCA</td><td>Per-provider eval matrix (INT-8), a minimum capability bar, and the evidence requirement on every claim.</td></tr>
+          <tr><td>Remote access to target clusters</td><td>Credential sprawl; unreachable private control planes</td><td>Per-cluster least-privilege identity through Workload Identity, no stored admin kubeconfigs, reachability checked per cluster in the registry.</td></tr>
+          <tr><td>Inbound Datadog webhook endpoint</td><td>The alert endpoint is reachable from the internet</td><td>Verify a shared secret in a header, restrict to Datadog's published webhook source ranges, rate-limit, and treat the payload as untrusted (SEC-4).</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <section id="questions">
+      <h2><span class="num">14</span>Open questions</h2>
+      <ul>
+        <li>Which provider and models are the reference for evals and defaults, do releases gate only on the reference, and what is the acceptable cost per investigation after the Phase 2 baseline?</li>
+        <li>Build the provider layer in-house (a thin interface and a few adapters) or adopt a Go LLM library? Decide in the Phase 0 ADR.</li>
+        <li>Phase 1 evidence store: this draft assumes local SQLite with the final Evidence shape and Postgres from Phase 2. Confirm.</li>
+        <li>Should non-GKE clusters (EKS, kind-only users) be a v1 target or community-contributed later?</li>
+        <li>How should Slack users map to Kubernetes identities: Google Groups, a static map, or OIDC claims?</li>
+        <li>Should every write go through Git, including pod deletes, for a single audit trail?</li>
+        <li>How does the agent authenticate to Datadog: API and application keys from Secret Manager, a service account, or the Datadog MCP with OAuth? This draft assumes keys for the service and MCP for the CLI.</li>
+        <li>Is the Datadog Agent deployed on the clusters, or does all telemetry arrive through the OpenTelemetry Collector and custom exporters? Are service, env, and version tags applied consistently, including on custom exporter metrics?</li>
+        <li>Are Argo CD and GitHub Actions both in use, or does Datadog already carry enough deploy and pipeline context?</li>
+        <li>Is there one Datadog org and site for all target clusters, or several?</li>
+        <li>Where do <code>RemediationRequest</code> records live now that the agent is off-cluster: a CRD on the management side with a cluster field, the database, or a CRD per target (ADR 0005, decided in Phase 4)?</li>
+        <li>Where does the agent run: a management GKE cluster, a VM, or another surface, and what diagnoses that host?</li>
+      </ul>
+    </section>
+
+    <section id="checklist">
+      <h2><span class="num">A</span>Buyer checklist coverage</h2>
+      <p>The source article ends with questions a team should ask before adopting an AI SRE agent. Paraphrased here, with where this PRD answers each.</p>
+      <div class="tbl"><table>
+        <thead><tr><th>Question (paraphrased)</th><th>Answer in this PRD</th><th>Phase</th></tr></thead>
+        <tbody>
+          <tr><td>Does it understand Kubernetes natively?</td><td>KN-1 to KN-5, topology graph</td><td class="nw">1, 3</td></tr>
+          <tr><td>Does it investigate across several telemetry sources?</td><td>INV-2, INT-2, INT-3</td><td class="nw">2, 3</td></tr>
+          <tr><td>Does it show evidence for its recommendations?</td><td>INV-3, evidence store</td><td>1</td></tr>
+          <tr><td>Can fixes require human approval?</td><td>REM-2, REM-3, autonomy levels</td><td>4</td></tr>
+          <tr><td>Does it work with our existing tools?</td><td>INT-1 to INT-8</td><td class="nw">2-5</td></tr>
+          <tr><td>Are RBAC, audit logs, and security controls in place?</td><td>SEC-1 to SEC-7</td><td class="nw">0-5</td></tr>
+          <tr><td>Does it scale across clusters and environments?</td><td>Off-cluster agent with a cluster registry</td><td>5</td></tr>
+          <tr><td>How is operational data protected?</td><td>SEC-2, SEC-6, self-hosted LLM</td><td class="nw">2, 5</td></tr>
+          <tr><td>Can we measure MTTR improvement?</td><td>Section 11 metrics, OBS-4</td><td>5</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <footer>
+      Source: Ankush Madaan, <a href="https://medium.com/atmosly/how-to-choose-an-ai-sre-agent-for-kubernetes-operations-eb1dc52c5884">How to Choose an AI SRE Agent for Kubernetes Operations</a>, Atmosly on Medium, 14 Aug 2026. Targets in this draft are proposals to validate during Phases 1 and 2.
+    </footer>
+  </main>
+</div>
+
+</body></html>
