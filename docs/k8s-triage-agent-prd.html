@@ -213,9 +213,9 @@ footer { margin-top: 48px; padding-top: 16px; border-top: 1px solid var(--line);
       <dl class="meta">
         <div><dt>Project</dt><dd>upsera-agent</dd></div>
         <div><dt>Status</dt><dd><span class="pill draft">Draft</span></dd></div>
-        <div><dt>Version</dt><dd>0.3</dd></div>
+        <div><dt>Version</dt><dd>0.4</dd></div>
         <div><dt>Owner</dt><dd>David (@davidsugianto)</dd></div>
-        <div><dt>Updated</dt><dd>11 Oct 2026</dd></div>
+        <div><dt>Updated</dt><dd>13 Oct 2026</dd></div>
         <div><dt>Target</dt><dd>GKE, Datadog, Go, GitHub, open source</dd></div>
       </dl>
     </header>
@@ -225,7 +225,7 @@ footer { margin-top: 48px; padding-top: 16px; border-top: 1px solid var(--line);
       <p>Operating production Kubernetes means reading pod states, events, rollout history, metrics, and logs across several tools before anyone can say why something broke. This project builds an AI SRE agent that does that legwork automatically, explains its conclusion with linked evidence, and offers a safe next action.</p>
       <p>The design follows the six evaluation criteria from Atmosly's article <a href="https://medium.com/atmosly/how-to-choose-an-ai-sre-agent-for-kubernetes-operations-eb1dc52c5884">How to Choose an AI SRE Agent for Kubernetes Operations</a> (Aug 2026): Kubernetes-native understanding, multi-signal incident investigation, controlled remediation, toolchain integration, observability context, and security governance. Here those criteria are treated as build requirements instead of a buying checklist. Appendix A maps each of the article's buyer questions to the section that answers it.</p>
       <p><b>Scope.</b> <code>upsera-agent</code> is the project and GitHub repository; <code>k8s-triage-agent</code> is its first agent and the only one this PRD specifies. Shared parts (LLM providers, the Datadog client, read-only tools, redaction, policy, audit) sit in agent-neutral packages so later agents can reuse them, but no other agent is designed here. The agent runs outside the clusters it diagnoses (ADR 0002), so it stays available during the incidents it exists for. The LLM is a configuration choice (Anthropic, OpenAI, Gemini, or any OpenAI-compatible endpoint), not a dependency.</p>
-      <p><b>Datadog-native.</b> Alerts come from Datadog monitors, and telemetry reaches Datadog through the OpenTelemetry Collector and custom exporters (and the Datadog Agent, if deployed; see open questions). Datadog is therefore the only alert and telemetry source: there is no Prometheus, Alertmanager, or SigNoz. The agent reads live cluster state from the Kubernetes API and everything else from Datadog. The investigation method comes from the team's existing SRE skills (<code>datadog-investigate</code>, <code>k8s-triage</code>, <code>sre-incident-response</code>), turned into a service with budgets, policy, and evals. It does not try to replace Datadog's own Bits AI SRE. What it adds is in-cluster, policy-gated remediation, an open eval suite, and control over prompts and the data path.</p>
+      <p><b>Datadog-native.</b> Alerts come from Datadog monitors, and telemetry reaches Datadog through the OpenTelemetry Collector and custom exporters (and the Datadog Agent, if deployed; see open questions). Datadog is therefore the only alert and telemetry source: there is no Prometheus, Alertmanager, or SigNoz. The agent reads live cluster state from the Kubernetes API and everything else from Datadog. The investigation method comes from the team's existing SRE skills (<code>datadog-investigate</code>, <code>k8s-triage</code>, <code>sre-incident-response</code>), turned into a service with budgets, policy, and evals; <a href="#architecture">section 5</a> maps each step of today's workflow to a component. It does not try to replace Datadog's own Bits AI SRE. What it adds is in-cluster, policy-gated remediation, an open eval suite, and control over prompts and the data path.</p>
       <div class="callout">
         <p><b>Design stance.</b> Rules first, LLM second. Deterministic detectors catch known failure signatures cheaply; the LLM handles correlation and explanation. The LLM never holds write credentials: it can only propose actions from a fixed catalog, and a separate policy-gated executor carries them out.</p>
       </div>
@@ -351,118 +351,293 @@ footer { margin-top: 48px; padding-top: 16px; border-top: 1px solid var(--line);
 
     <section id="architecture">
       <h2><span class="num">5</span>Architecture</h2>
-      <p>Four stages: ingest signals, reason over them with read-only tools, decide on an action through policy, and act with a narrowly scoped identity. The read path and the write path never share credentials.</p>
+      <p>The agent is the team's current incident workflow turned into a service. This section starts from that workflow, maps each of its steps to a component, and then shows the target design.</p>
+
+      <h3>Today: the skill-driven workflow</h3>
+      <p>Today the on-call engineer opens Claude Code and runs <code>/sre-incident-response &lt;datadog-link&gt;</code>. The skill acts as incident coordinator, not as an investigator: it opens a timestamped log, proposes a severity, and hands the analysis to whichever investigation skills match the input (a Datadog link goes to <code>datadog-investigate</code>, a named workload to <code>k8s-triage</code>, both in parallel). It then records their answers, keeps a synthesis, and drafts mitigation options and status updates for the engineer, who stays the incident commander and makes every change.</p>
       <figure>
         <div class="fig-scroll">
-        <svg viewBox="0 0 1130 520" role="img" aria-label="Architecture: alerts and change events are ingested, the investigator reasons through read-only tools over a context store and telemetry, and any write passes through a policy gate and optional human approval before a scoped executor touches the cluster.">
+        <svg viewBox="0 0 1130 490" role="img" aria-label="Today's workflow. The commander pastes a Datadog alert link into the sre-incident-response skill. The coordinator opens a log and proposes a severity, routes the input to datadog-investigate and k8s-triage running in parallel as read-only subagents, synthesizes their answers, drafts reversible options and status updates for the commander, posts once to Slack and watches the thread, and at close writes a postmortem. A step that would change anything goes back to the commander for approval.">
+          <defs>
+            <marker id="ah0" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker>
+          </defs>
+
+          <!-- Lane: people -->
+          <text class="d-h" x="40" y="28">COMMANDER AND RESPONDERS</text>
+          <rect class="d-box" x="40" y="40" width="150" height="52" rx="6"/>
+          <text class="d-t" x="115" y="62" text-anchor="middle">Paste alert link</text>
+          <text class="d-s" x="115" y="79" text-anchor="middle">slash command + URL</text>
+          <rect class="d-gate" x="220" y="40" width="150" height="52" rx="6"/>
+          <text class="d-t" x="295" y="62" text-anchor="middle">Approve a write</text>
+          <text class="d-s" x="295" y="79" text-anchor="middle">yes or no, in session</text>
+          <rect class="d-box" x="580" y="40" width="150" height="52" rx="6"/>
+          <text class="d-t" x="655" y="62" text-anchor="middle">Decide and act</text>
+          <text class="d-s" x="655" y="79" text-anchor="middle">runs fixes, sends updates</text>
+          <rect class="d-box" x="760" y="40" width="150" height="52" rx="6"/>
+          <text class="d-t" x="835" y="62" text-anchor="middle">Slack thread</text>
+          <text class="d-s" x="835" y="79" text-anchor="middle">responders, canvas</text>
+          <rect class="d-box" x="940" y="40" width="150" height="52" rx="6"/>
+          <text class="d-t" x="1015" y="62" text-anchor="middle">Confirm close</text>
+          <text class="d-s" x="1015" y="79" text-anchor="middle">"closed" reply</text>
+
+          <!-- Lane: coordinator -->
+          <text class="d-h" x="40" y="246">COORDINATOR</text>
+          <text class="d-l" x="40" y="262">/sre-incident-response</text>
+          <rect class="d-box" x="40" y="170" width="150" height="56" rx="6"/>
+          <text class="d-t" x="115" y="192" text-anchor="middle">Open</text>
+          <text class="d-s" x="115" y="210" text-anchor="middle">log, SEV proposal, draft</text>
+          <rect class="d-box" x="220" y="170" width="150" height="56" rx="6"/>
+          <text class="d-t" x="295" y="192" text-anchor="middle">Route</text>
+          <text class="d-s" x="295" y="210" text-anchor="middle">match input to roster</text>
+          <rect class="d-box" x="400" y="170" width="150" height="56" rx="6"/>
+          <text class="d-t" x="475" y="192" text-anchor="middle">Synthesize</text>
+          <text class="d-s" x="475" y="210" text-anchor="middle">one row per source</text>
+          <rect class="d-box" x="580" y="170" width="150" height="56" rx="6"/>
+          <text class="d-t" x="655" y="192" text-anchor="middle">Options + comms</text>
+          <text class="d-s" x="655" y="210" text-anchor="middle">reversible; update / 15 min</text>
+          <rect class="d-box" x="760" y="170" width="150" height="56" rx="6"/>
+          <text class="d-t" x="835" y="192" text-anchor="middle">Post + watch</text>
+          <text class="d-s" x="835" y="210" text-anchor="middle">summary once, every 5 min</text>
+          <rect class="d-box" x="940" y="170" width="150" height="56" rx="6"/>
+          <text class="d-t" x="1015" y="192" text-anchor="middle">Close</text>
+          <text class="d-s" x="1015" y="210" text-anchor="middle">durations, postmortem</text>
+
+          <!-- Lane: investigators -->
+          <rect class="d-zone" x="220" y="268" width="330" height="116" rx="10"/>
+          <text class="d-h" x="232" y="286">INVESTIGATORS · PARALLEL, READ-ONLY</text>
+          <rect class="d-box" x="232" y="296" width="150" height="74" rx="6"/>
+          <text class="d-t" x="307" y="318" text-anchor="middle">datadog-investigate</text>
+          <text class="d-s" x="307" y="336" text-anchor="middle">planner + executors</text>
+          <text class="d-s" x="307" y="352" text-anchor="middle">4 probes × 3 rounds</text>
+          <rect class="d-box" x="392" y="296" width="146" height="74" rx="6"/>
+          <text class="d-t" x="465" y="318" text-anchor="middle">k8s-triage</text>
+          <text class="d-s" x="465" y="336" text-anchor="middle">events, logs, owners</text>
+          <text class="d-s" x="465" y="352" text-anchor="middle">debug pod only on OK</text>
+
+          <!-- Lane: evidence and records -->
+          <text class="d-h" x="40" y="410">EVIDENCE AND RECORDS</text>
+          <rect class="d-band" x="232" y="420" width="150" height="52" rx="6"/>
+          <text class="d-t" x="307" y="442" text-anchor="middle">Datadog MCP</text>
+          <text class="d-s" x="307" y="459" text-anchor="middle">engineer's OAuth session</text>
+          <rect class="d-band" x="392" y="420" width="146" height="52" rx="6"/>
+          <text class="d-t" x="465" y="442" text-anchor="middle">kubectl</text>
+          <text class="d-s" x="465" y="459" text-anchor="middle">engineer's context</text>
+          <rect class="d-band" x="580" y="420" width="150" height="52" rx="6"/>
+          <text class="d-t" x="655" y="442" text-anchor="middle">Incident folder</text>
+          <text class="d-s" x="655" y="459" text-anchor="middle">Markdown log, answers</text>
+          <rect class="d-band" x="940" y="420" width="150" height="52" rx="6"/>
+          <text class="d-t" x="1015" y="442" text-anchor="middle">Postmortem</text>
+          <text class="d-s" x="1015" y="459" text-anchor="middle">HTML report</text>
+
+          <!-- Coordinator flow -->
+          <line class="d-line" x1="190" y1="198" x2="218" y2="198" marker-end="url(#ah0)"/>
+          <line class="d-line" x1="370" y1="198" x2="398" y2="198" marker-end="url(#ah0)"/>
+          <line class="d-line" x1="550" y1="198" x2="578" y2="198" marker-end="url(#ah0)"/>
+          <line class="d-line" x1="730" y1="198" x2="758" y2="198" marker-end="url(#ah0)"/>
+          <line class="d-line" x1="910" y1="198" x2="938" y2="198" marker-end="url(#ah0)"/>
+          <polyline class="d-line dash" points="800,170 800,132 330,132 330,168" marker-end="url(#ah0)"/>
+          <text class="d-l" x="480" y="126" text-anchor="middle">new facts: route again</text>
+
+          <!-- People and coordinator -->
+          <line class="d-line" x1="115" y1="92" x2="115" y2="168" marker-end="url(#ah0)"/>
+          <text class="d-l" x="123" y="114">alert link</text>
+          <line class="d-line acc dash" x1="260" y1="96" x2="260" y2="168" marker-start="url(#ah0)" marker-end="url(#ah0)"/>
+          <text class="d-l" x="268" y="114">NEEDS APPROVAL</text>
+          <line class="d-line" x1="655" y1="170" x2="655" y2="94" marker-end="url(#ah0)"/>
+          <text class="d-l" x="663" y="114">options, drafts</text>
+          <line class="d-line" x1="835" y1="168" x2="835" y2="94" marker-start="url(#ah0)" marker-end="url(#ah0)"/>
+          <text class="d-l" x="843" y="114">post, read</text>
+          <line class="d-line" x1="1015" y1="92" x2="1015" y2="168" marker-end="url(#ah0)"/>
+          <text class="d-l" x="1023" y="114">confirm</text>
+
+          <!-- Coordinator and investigators -->
+          <line class="d-line" x1="295" y1="226" x2="295" y2="266" marker-end="url(#ah0)"/>
+          <text class="d-l" x="303" y="252">same brief</text>
+          <line class="d-line" x1="475" y1="268" x2="475" y2="228" marker-end="url(#ah0)"/>
+          <text class="d-l" x="483" y="252">answers</text>
+          <line class="d-line" x1="307" y1="370" x2="307" y2="418" marker-end="url(#ah0)"/>
+          <line class="d-line" x1="465" y1="370" x2="465" y2="418" marker-end="url(#ah0)"/>
+
+          <!-- Records -->
+          <line class="d-line" x1="655" y1="226" x2="655" y2="418" marker-end="url(#ah0)"/>
+          <text class="d-l" x="663" y="330">incident_log.py</text>
+          <line class="d-line" x1="1015" y1="226" x2="1015" y2="418" marker-end="url(#ah0)"/>
+          <text class="d-l" x="1007" y="330" text-anchor="end">investigation-report</text>
+        </svg>
+        </div>
+        <figcaption><b>The coordinator records and routes; it does no analysis.</b> Investigators find the cause, and only the commander changes anything. A step that would write, such as a debug container, comes back as a <code>NEEDS APPROVAL</code> line for the commander. Every timeline entry goes through <code>incident_log.py</code>, so times are UTC and carry a source. The Slack post and thread watch run only when a channel is configured. Investigator budgets shown are normal mode; deep mode allows 6 probes, 5 rounds, and 25 queries per probe.</figcaption>
+      </figure>
+
+      <div class="cols">
+        <div>
+          <h3>What already works</h3>
+          <ul>
+            <li><b>Read-only by construction.</b> Neither the coordinator nor the investigators change production; writes come back for approval.</li>
+            <li><b>Investigators are a roster.</b> They are picked by input and run in parallel. Adding one means adding a row.</li>
+            <li><b>A timeline you can trust.</b> Times come from a script, answers are saved verbatim, and the coordinator never raises an investigator's confidence.</li>
+            <li><b>Conflicts stay visible.</b> The synthesis gives one row per source, says what each source cannot see, and names the next evidence needed.</li>
+            <li><b>The postmortem comes from the same log.</b> It is blameless and keeps unknowns marked as unknown.</li>
+          </ul>
+        </div>
+        <div>
+          <h3>What is still manual</h3>
+          <ul>
+            <li><b>Trigger.</b> Someone has to notice the alert and paste the link. The agent takes the monitor webhook (INT-1).</li>
+            <li><b>State.</b> Incident state lives in Markdown on one laptop, and handover happens only through the Slack thread. The agent keeps a Postgres incident store and an API.</li>
+            <li><b>Identity.</b> The skills run on the engineer's Datadog session and kubectl context. The agent uses read-only keys and a reader role per cluster (SEC-1).</li>
+            <li><b>Data handling.</b> Keeping secrets out of the model depends on the model following the skills' rules. The agent redacts in the tool layer instead (SEC-2).</li>
+            <li><b>Measurement.</b> Accuracy and time to RCA are not tracked. The agent adds evals and feedback (section 11, INV-7).</li>
+            <li><b>Fixes.</b> Every fix is typed by hand. The agent adds the action catalog and policy gate (section 7).</li>
+          </ul>
+        </div>
+      </div>
+
+      <h3>From skills to service</h3>
+      <p>Each step of the current workflow becomes a component or requirement of the agent. The method stays the same; the trigger, the storage, the identity, and the write path change.</p>
+      <div class="tbl"><table>
+        <thead><tr><th>Today (skill)</th><th>In k8s-triage-agent</th><th>Requirements</th><th>Phase</th></tr></thead>
+        <tbody>
+          <tr><td>Paste a Datadog link into <code>/sre-incident-response</code></td><td>Alert Receiver on the monitor webhook. A pasted link still works through <code>kubectl triage alert</code> and <code>/triage</code>.</td><td class="nw">INT-1, INV-1, INV-6</td><td>2</td></tr>
+          <tr><td><code>incident_log.py open</code>: id, log, severity proposal</td><td>Incident record in Postgres; severity proposal in incident mode</td><td class="nw">INV-1, INV-10</td><td class="nw">2, 5</td></tr>
+          <tr><td>Route by roster; parallel subagents</td><td>Incident Coordinator and the investigator roster</td><td class="nw">INV-2</td><td class="nw">1, 2</td></tr>
+          <tr><td><code>datadog-investigate</code>: planner and executors, bounded probes and rounds</td><td>Datadog investigator. The skill's budgets become the INV-2 caps.</td><td class="nw">INV-2, INV-4, INV-8</td><td>2</td></tr>
+          <tr><td><code>k8s-triage</code>: events, logs, owner chain via kubectl</td><td>Workload triage: detectors plus the Kubernetes tools</td><td class="nw">KN-2, KN-4, KN-5</td><td>1</td></tr>
+          <tr><td>Save each answer verbatim; hypothesis and evidence entries</td><td>Evidence and Hypothesis rows with evidence IDs</td><td class="nw">INV-3</td><td class="nw">1, 2</td></tr>
+          <tr><td>Synthesis: source, confidence, does-not-cover, combined reading</td><td>Coordinator synthesis, shown in the RCA post</td><td class="nw">INV-4, INV-8, INV-9</td><td class="nw">2, 3</td></tr>
+          <tr><td><code>NEEDS APPROVAL</code> line answered in the session</td><td>Remediation Planner proposal, Policy Gate, Slack approval</td><td class="nw">REM-1, REM-2, REM-3</td><td>4</td></tr>
+          <tr><td>Numbered reversible options, run by a human</td><td>L1 Suggest: exact command or PR diff</td><td class="nw">REM-1, REM-6</td><td>4</td></tr>
+          <tr><td>Status draft every 15 min; one Slack post; 5-minute thread watch</td><td>Slack RCA post and thread replies; status drafts in incident mode</td><td class="nw">INT-1, INV-7, INV-10</td><td class="nw">2, 5</td></tr>
+          <tr><td>Close: durations, postmortem through <code>investigation-report</code></td><td>Incident-mode postmortem draft; export to GitHub Issues or Jira</td><td class="nw">INV-10, INT-6</td><td>5</td></tr>
+          <tr><td>Datadog MCP on the engineer's OAuth session; the engineer's kubectl context</td><td><code>DatadogClient</code> with read-only keys; reader ClusterRole per target cluster</td><td class="nw">INT-2, SEC-1</td><td class="nw">0, 2</td></tr>
+        </tbody>
+      </table></div>
+
+      <h3>Target architecture</h3>
+      <p>Four stages: ingest signals, reason over them with read-only tools, decide on an action through policy, and act with a narrowly scoped identity. Reasoning is split the same way as in the skills: an Incident Coordinator routes, records, and synthesizes, and investigators find the cause. The read path and the write path never share credentials.</p>
+      <figure>
+        <div class="fig-scroll">
+        <svg viewBox="0 0 1130 520" role="img" aria-label="Architecture: alerts and change events are ingested; the Incident Coordinator dispatches the Datadog investigator and workload triage in parallel, which reason through read-only tools over a context store and Datadog; any write passes through a remediation planner, a policy gate, and optional human approval before a scoped executor touches the cluster.">
           <defs>
             <marker id="ah1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker>
           </defs>
-          <text class="d-h" x="100" y="30" text-anchor="middle">SIGNALS</text>
-          <text class="d-h" x="330" y="30" text-anchor="middle">INGEST</text>
-          <text class="d-h" x="575" y="30" text-anchor="middle">REASON (READ-ONLY)</text>
-          <text class="d-h" x="925" y="30" text-anchor="middle">DECIDE AND ACT</text>
+          <text class="d-h" x="78" y="30" text-anchor="middle">SIGNALS</text>
+          <text class="d-h" x="256" y="30" text-anchor="middle">INGEST</text>
+          <text class="d-h" x="540" y="30" text-anchor="middle">COORDINATE AND INVESTIGATE (READ-ONLY)</text>
+          <text class="d-h" x="927" y="30" text-anchor="middle">DECIDE AND ACT</text>
 
-          <rect class="d-zone" x="725" y="42" width="395" height="394" rx="10"/>
-          <text class="d-h" x="737" y="428">WRITE PATH</text>
+          <rect class="d-zone" x="736" y="42" width="382" height="394" rx="10"/>
+          <text class="d-h" x="748" y="428">WRITE PATH</text>
 
           <!-- Signals -->
-          <rect class="d-box" x="20" y="54" width="160" height="52" rx="6"/>
-          <text class="d-t" x="100" y="77" text-anchor="middle">Datadog monitors</text>
-          <text class="d-s" x="100" y="93" text-anchor="middle">alert webhook</text>
-          <rect class="d-box" x="20" y="164" width="160" height="52" rx="6"/>
-          <text class="d-t" x="100" y="187" text-anchor="middle">Datadog events</text>
-          <text class="d-s" x="100" y="203" text-anchor="middle">deploys, CI, Argo CD</text>
+          <rect class="d-box" x="16" y="54" width="124" height="52" rx="6"/>
+          <text class="d-t" x="78" y="77" text-anchor="middle">Datadog monitors</text>
+          <text class="d-s" x="78" y="93" text-anchor="middle">alert webhook</text>
+          <rect class="d-box" x="16" y="164" width="124" height="52" rx="6"/>
+          <text class="d-t" x="78" y="187" text-anchor="middle">Datadog events</text>
+          <text class="d-s" x="78" y="203" text-anchor="middle">deploys, CI, Argo CD</text>
 
           <!-- Ingest -->
-          <rect class="d-box" x="250" y="54" width="160" height="52" rx="6"/>
-          <text class="d-t" x="330" y="77" text-anchor="middle">Alert Receiver</text>
-          <text class="d-s" x="330" y="93" text-anchor="middle">dedup + group</text>
-          <rect class="d-box" x="250" y="164" width="160" height="52" rx="6"/>
-          <text class="d-t" x="330" y="187" text-anchor="middle">Change Collector</text>
-          <text class="d-s" x="330" y="203" text-anchor="middle">deploys, configs, scaling</text>
-          <rect class="d-box" x="250" y="274" width="160" height="52" rx="6"/>
-          <text class="d-t" x="330" y="297" text-anchor="middle">Event Watcher</text>
-          <text class="d-s" x="330" y="313" text-anchor="middle">informers</text>
+          <rect class="d-box" x="190" y="54" width="132" height="52" rx="6"/>
+          <text class="d-t" x="256" y="77" text-anchor="middle">Alert Receiver</text>
+          <text class="d-s" x="256" y="93" text-anchor="middle">dedup + group</text>
+          <rect class="d-box" x="190" y="164" width="132" height="52" rx="6"/>
+          <text class="d-t" x="256" y="187" text-anchor="middle">Change Collector</text>
+          <text class="d-s" x="256" y="203" text-anchor="middle">deploys, config, scale</text>
+          <rect class="d-box" x="190" y="354" width="132" height="52" rx="6"/>
+          <text class="d-t" x="256" y="377" text-anchor="middle">Event Watcher</text>
+          <text class="d-s" x="256" y="393" text-anchor="middle">informers</text>
 
-          <!-- Reason -->
-          <rect class="d-box" x="480" y="54" width="190" height="52" rx="6"/>
-          <text class="d-t" x="575" y="77" text-anchor="middle">Investigator</text>
-          <text class="d-s" x="575" y="93" text-anchor="middle">LLM tool loop + budgets</text>
-          <rect class="d-box" x="480" y="164" width="190" height="52" rx="6"/>
-          <text class="d-t" x="575" y="187" text-anchor="middle">Read-only Tools</text>
-          <text class="d-s" x="575" y="203" text-anchor="middle">detectors + MCP server</text>
-          <rect class="d-box" x="480" y="274" width="190" height="52" rx="6"/>
-          <text class="d-t" x="575" y="297" text-anchor="middle">Context Store</text>
-          <text class="d-s" x="575" y="313" text-anchor="middle">topology + change timeline</text>
-          <rect class="d-box" x="480" y="360" width="190" height="52" rx="6"/>
-          <text class="d-t" x="575" y="383" text-anchor="middle">Datadog</text>
-          <text class="d-s" x="575" y="399" text-anchor="middle">metrics, logs, traces, monitors</text>
+          <!-- Coordinate and investigate -->
+          <rect class="d-box" x="382" y="54" width="316" height="84" rx="6"/>
+          <text class="d-t" x="540" y="78" text-anchor="middle">Incident Coordinator</text>
+          <text class="d-s" x="540" y="97" text-anchor="middle">routing, synthesis, incident record (Ph 2)</text>
+          <text class="d-s" x="540" y="114" text-anchor="middle">timeline, status drafts, postmortem (Ph 5)</text>
+          <rect class="d-box" x="382" y="168" width="153" height="54" rx="6"/>
+          <text class="d-t" x="458" y="191" text-anchor="middle">Datadog investigator</text>
+          <text class="d-s" x="458" y="208" text-anchor="middle">planner + executors</text>
+          <rect class="d-box" x="545" y="168" width="153" height="54" rx="6"/>
+          <text class="d-t" x="622" y="191" text-anchor="middle">Workload triage</text>
+          <text class="d-s" x="622" y="208" text-anchor="middle">detectors + live state</text>
+          <rect class="d-box" x="382" y="262" width="316" height="52" rx="6"/>
+          <text class="d-t" x="540" y="285" text-anchor="middle">Read-only Tools</text>
+          <text class="d-s" x="540" y="301" text-anchor="middle">k8s_* and dd_* tools, redacted · also served over MCP</text>
+          <rect class="d-box" x="382" y="354" width="153" height="52" rx="6"/>
+          <text class="d-t" x="458" y="377" text-anchor="middle">Context Store</text>
+          <text class="d-s" x="458" y="393" text-anchor="middle">topology + changes</text>
+          <rect class="d-box" x="545" y="354" width="153" height="52" rx="6"/>
+          <text class="d-t" x="622" y="377" text-anchor="middle">Datadog</text>
+          <text class="d-s" x="622" y="393" text-anchor="middle">metrics, logs, traces</text>
 
           <!-- Decide and act -->
-          <rect class="d-box" x="740" y="54" width="170" height="52" rx="6"/>
-          <text class="d-t" x="825" y="77" text-anchor="middle">Remediation Planner</text>
-          <text class="d-s" x="825" y="93" text-anchor="middle">typed action catalog</text>
-          <rect class="d-gate" x="740" y="164" width="170" height="52" rx="6"/>
-          <text class="d-t" x="825" y="187" text-anchor="middle">Policy Gate</text>
-          <text class="d-s" x="825" y="203" text-anchor="middle">OPA + autonomy level</text>
-          <rect class="d-box" x="740" y="274" width="170" height="52" rx="6"/>
-          <text class="d-t" x="825" y="297" text-anchor="middle">Executor</text>
-          <text class="d-s" x="825" y="313" text-anchor="middle">scoped SA, dry-run first</text>
-          <rect class="d-box" x="980" y="54" width="130" height="52" rx="6"/>
-          <text class="d-t" x="1045" y="77" text-anchor="middle">Slack · GitHub</text>
-          <text class="d-s" x="1045" y="93" text-anchor="middle">RCA post, fix PR</text>
-          <rect class="d-box" x="980" y="164" width="130" height="52" rx="6"/>
-          <text class="d-t" x="1045" y="187" text-anchor="middle">Human Approval</text>
-          <text class="d-s" x="1045" y="203" text-anchor="middle">Slack button</text>
-          <rect class="d-box" x="980" y="360" width="130" height="52" rx="6"/>
-          <text class="d-t" x="1045" y="383" text-anchor="middle">Audit Log</text>
-          <text class="d-s" x="1045" y="399" text-anchor="middle">append-only</text>
+          <rect class="d-box" x="750" y="54" width="160" height="52" rx="6"/>
+          <text class="d-t" x="830" y="77" text-anchor="middle">Remediation Planner</text>
+          <text class="d-s" x="830" y="93" text-anchor="middle">typed action catalog</text>
+          <rect class="d-gate" x="750" y="164" width="160" height="52" rx="6"/>
+          <text class="d-t" x="830" y="187" text-anchor="middle">Policy Gate</text>
+          <text class="d-s" x="830" y="203" text-anchor="middle">OPA + autonomy level</text>
+          <rect class="d-box" x="750" y="274" width="160" height="52" rx="6"/>
+          <text class="d-t" x="830" y="297" text-anchor="middle">Executor</text>
+          <text class="d-s" x="830" y="313" text-anchor="middle">scoped SA, dry-run first</text>
+          <rect class="d-box" x="970" y="54" width="136" height="52" rx="6"/>
+          <text class="d-t" x="1038" y="77" text-anchor="middle">Slack · GitHub</text>
+          <text class="d-s" x="1038" y="93" text-anchor="middle">RCA post, fix PR</text>
+          <rect class="d-box" x="970" y="164" width="136" height="52" rx="6"/>
+          <text class="d-t" x="1038" y="187" text-anchor="middle">Human Approval</text>
+          <text class="d-s" x="1038" y="203" text-anchor="middle">Slack button</text>
+          <rect class="d-box" x="970" y="360" width="136" height="52" rx="6"/>
+          <text class="d-t" x="1038" y="383" text-anchor="middle">Audit Log</text>
+          <text class="d-s" x="1038" y="399" text-anchor="middle">append-only</text>
 
           <!-- Cluster band -->
-          <rect class="d-band" x="20" y="460" width="1090" height="46" rx="6"/>
-          <text class="d-t" x="565" y="488" text-anchor="middle">Kubernetes cluster(s) on GKE</text>
+          <rect class="d-band" x="16" y="460" width="1090" height="46" rx="6"/>
+          <text class="d-t" x="561" y="488" text-anchor="middle">Kubernetes cluster(s) on GKE</text>
 
-          <!-- Arrows -->
-          <line class="d-line" x1="180" y1="80" x2="248" y2="80" marker-end="url(#ah1)"/>
-          <text class="d-l" x="214" y="72" text-anchor="middle">webhook</text>
-          <line class="d-line" x1="180" y1="190" x2="248" y2="190" marker-end="url(#ah1)"/>
-          <text class="d-l" x="214" y="182" text-anchor="middle">events</text>
-          <line class="d-line" x1="410" y1="80" x2="478" y2="80" marker-end="url(#ah1)"/>
-          <text class="d-l" x="444" y="72" text-anchor="middle">incident</text>
-          <polyline class="d-line" points="410,190 434,190 434,290 478,290" marker-end="url(#ah1)"/>
-          <line class="d-line" x1="410" y1="310" x2="478" y2="310" marker-end="url(#ah1)"/>
-          <text class="d-l" x="452" y="327" text-anchor="middle">writes</text>
-          <line class="d-line" x1="330" y1="460" x2="330" y2="328" marker-end="url(#ah1)"/>
-          <text class="d-l" x="338" y="400">watch</text>
+          <!-- Ingest arrows -->
+          <line class="d-line" x1="140" y1="80" x2="188" y2="80" marker-end="url(#ah1)"/>
+          <text class="d-l" x="164" y="72" text-anchor="middle">webhook</text>
+          <line class="d-line" x1="140" y1="190" x2="188" y2="190" marker-end="url(#ah1)"/>
+          <text class="d-l" x="164" y="182" text-anchor="middle">events</text>
+          <line class="d-line" x1="322" y1="80" x2="380" y2="80" marker-end="url(#ah1)"/>
+          <text class="d-l" x="351" y="72" text-anchor="middle">incident</text>
+          <polyline class="d-line" points="322,190 350,190 350,368 380,368" marker-end="url(#ah1)"/>
+          <line class="d-line" x1="322" y1="392" x2="380" y2="392" marker-end="url(#ah1)"/>
+          <text class="d-l" x="351" y="420" text-anchor="middle">writes</text>
+          <line class="d-line" x1="256" y1="460" x2="256" y2="408" marker-end="url(#ah1)"/>
+          <text class="d-l" x="264" y="440">watch</text>
 
-          <line class="d-line" x1="575" y1="106" x2="575" y2="162" marker-end="url(#ah1)"/>
-          <text class="d-l" x="583" y="139">tool calls</text>
-          <line class="d-line" x1="575" y1="216" x2="575" y2="272" marker-end="url(#ah1)"/>
-          <text class="d-l" x="583" y="249">graph query</text>
-          <polyline class="d-line" points="670,190 700,190 700,458" marker-end="url(#ah1)"/>
-          <line class="d-line" x1="700" y1="386" x2="672" y2="386" marker-end="url(#ah1)"/>
-          <text class="d-l" x="708" y="452">get, list, logs</text>
+          <!-- Reason arrows -->
+          <line class="d-line" x1="458" y1="140" x2="458" y2="166" marker-start="url(#ah1)" marker-end="url(#ah1)"/>
+          <line class="d-line" x1="622" y1="140" x2="622" y2="166" marker-start="url(#ah1)" marker-end="url(#ah1)"/>
+          <text class="d-l" x="540" y="157" text-anchor="middle">dispatch · answers</text>
+          <line class="d-line" x1="458" y1="222" x2="458" y2="260" marker-end="url(#ah1)"/>
+          <line class="d-line" x1="622" y1="222" x2="622" y2="260" marker-end="url(#ah1)"/>
+          <text class="d-l" x="540" y="245" text-anchor="middle">tool calls</text>
+          <line class="d-line" x1="458" y1="314" x2="458" y2="352" marker-end="url(#ah1)"/>
+          <line class="d-line" x1="622" y1="314" x2="622" y2="352" marker-end="url(#ah1)"/>
+          <text class="d-l" x="540" y="337" text-anchor="middle">queries</text>
+          <polyline class="d-line" points="698,288 716,288 716,458" marker-end="url(#ah1)"/>
+          <text class="d-l" x="708" y="440" text-anchor="end">get, list, logs</text>
 
-          <line class="d-line" x1="670" y1="80" x2="738" y2="80" marker-end="url(#ah1)"/>
-          <text class="d-l" x="704" y="72" text-anchor="middle">RCA</text>
-          <line class="d-line" x1="910" y1="80" x2="978" y2="80" marker-end="url(#ah1)"/>
-          <text class="d-l" x="944" y="72" text-anchor="middle">post</text>
-          <line class="d-line" x1="825" y1="106" x2="825" y2="162" marker-end="url(#ah1)"/>
-          <text class="d-l" x="833" y="139">proposal</text>
-          <line class="d-line acc" x1="910" y1="190" x2="978" y2="190" marker-end="url(#ah1)"/>
-          <text class="d-l" x="944" y="182" text-anchor="middle">needs OK</text>
-          <polyline class="d-line acc" points="1045,216 1045,290 912,290" marker-end="url(#ah1)"/>
-          <text class="d-l" x="978" y="284" text-anchor="middle">approved</text>
-          <line class="d-line acc dash" x1="825" y1="216" x2="825" y2="272" marker-end="url(#ah1)"/>
-          <text class="d-l" x="833" y="249">auto (L3)</text>
-          <line class="d-line acc" x1="825" y1="326" x2="825" y2="458" marker-end="url(#ah1)"/>
-          <text class="d-l" x="833" y="400">scoped write</text>
+          <!-- Decide and act arrows -->
+          <line class="d-line" x1="698" y1="80" x2="748" y2="80" marker-end="url(#ah1)"/>
+          <text class="d-l" x="723" y="72" text-anchor="middle">RCA</text>
+          <line class="d-line" x1="910" y1="80" x2="968" y2="80" marker-end="url(#ah1)"/>
+          <text class="d-l" x="939" y="72" text-anchor="middle">post</text>
+          <line class="d-line" x1="830" y1="106" x2="830" y2="162" marker-end="url(#ah1)"/>
+          <text class="d-l" x="838" y="139">proposal</text>
+          <line class="d-line acc" x1="910" y1="190" x2="968" y2="190" marker-end="url(#ah1)"/>
+          <text class="d-l" x="939" y="182" text-anchor="middle">needs OK</text>
+          <polyline class="d-line acc" points="1038,216 1038,290 912,290" marker-end="url(#ah1)"/>
+          <text class="d-l" x="975" y="284" text-anchor="middle">approved</text>
+          <line class="d-line acc dash" x1="830" y1="216" x2="830" y2="272" marker-end="url(#ah1)"/>
+          <text class="d-l" x="838" y="249">auto (L3)</text>
+          <line class="d-line acc" x1="830" y1="326" x2="830" y2="458" marker-end="url(#ah1)"/>
+          <text class="d-l" x="838" y="400">scoped write</text>
           <polyline class="d-line" points="910,312 1000,312 1000,358" marker-end="url(#ah1)"/>
           <text class="d-l" x="955" y="328" text-anchor="middle">record</text>
         </svg>
         </div>
-        <figcaption><b>The LLM sits entirely on the read side.</b> Everything left of the dashed zone holds read-only credentials. A write reaches the cluster only after the policy gate either requires a human approval (solid accent path) or allows an allowlisted low-risk action to run on its own (dashed accent path). Every step lands in the audit log.</figcaption>
+        <figcaption><b>The LLM sits entirely on the read side.</b> The coordinator and both investigators hold read-only credentials, as the skills do today. A write reaches the cluster only after the policy gate either requires a human approval (solid accent path) or allows an allowlisted low-risk action to run on its own (dashed accent path). This replaces today's <code>NEEDS APPROVAL</code> line. Every step lands in the audit log.</figcaption>
       </figure>
 
       <h3>Components</h3>
@@ -472,7 +647,8 @@ footer { margin-top: 48px; padding-top: 16px; border-top: 1px solid var(--line);
           <tr><td class="nw"><b>Alert Receiver</b></td><td>Datadog webhook endpoint. Normalises the monitor payload and its tags to cluster, namespace, workload, service, and env, deduplicates, and opens or updates an incident.</td></tr>
           <tr><td class="nw"><b>Event Watcher</b></td><td>Shared informers on core and apps resources. Maintains the topology graph and records Kubernetes events and rollout revisions.</td></tr>
           <tr><td class="nw"><b>Change Collector</b></td><td>Pulls deploy and config changes from Datadog events and change tracking, fills commit SHA, author, and pipeline from Argo CD sync history and GitHub where Datadog lacks them, and writes everything to the change timeline.</td></tr>
-          <tr><td class="nw"><b>Investigator</b></td><td>Runs detectors, then a planner and executor loop with budgets. The planner (stronger model) forms hypotheses and judges evidence; executors (cheaper model) run bounded read-only probes. Produces hypotheses tied to evidence IDs. Method adapted from the <code>datadog-investigate</code> skill.</td></tr>
+          <tr><td class="nw"><b>Incident Coordinator</b></td><td>Owns an incident from open to close, as <code>sre-incident-response</code> does today, but does no analysis of its own. Sends the incident to the investigators whose inputs match and runs them in parallel. Stores each answer unchanged as evidence and keeps one synthesis: a row per source with its confidence and what it does not cover, a combined reading that never outranks its weakest source, and the next evidence needed. Phase 5 adds the timeline, severity proposal, status-update drafts, and postmortem (INV-10).</td></tr>
+          <tr><td class="nw"><b>Investigators</b></td><td>A roster, not a fixed pair. Each investigator declares the inputs it accepts, stays read-only, cites evidence, and states high, medium, or low confidence. The <b>Datadog investigator</b> runs a planner and executor loop with budgets: the planner (stronger model) forms hypotheses and judges evidence, and executors (cheaper model) run bounded read-only probes. Its method comes from <code>datadog-investigate</code>. <b>Workload triage</b> runs the detectors first, then reads events, the owner chain, logs, and rollout history from the live cluster. Its method comes from <code>k8s-triage</code>.</td></tr>
           <tr><td class="nw"><b>Read-only Tools</b></td><td>Typed Go functions: <code>k8s_get</code>, <code>k8s_describe</code>, <code>k8s_events</code>, <code>pod_logs</code>, and <code>rollout_history</code> against the cluster, and <code>dd_metrics</code>, <code>dd_logs</code>, <code>dd_spans</code>, <code>dd_monitors</code>, <code>dd_events</code>, and <code>change_timeline</code> against Datadog. Outputs are redacted and size-capped. Also served over MCP.</td></tr>
           <tr><td class="nw"><b>Remediation Planner</b></td><td>Maps a hypothesis to zero or more catalog actions with parameters, expected effect, and a verification check.</td></tr>
           <tr><td class="nw"><b>Policy Gate</b></td><td>Embedded OPA. Input: action, target, cluster, namespace, time, recent action count. Output: deny, suggest, approve, or auto.</td></tr>
