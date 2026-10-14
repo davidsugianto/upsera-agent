@@ -1,7 +1,8 @@
 # ADR 0004: SQLite for the Phase 1 evidence store, Postgres from Phase 2
 
-**Status:** proposed
+**Status:** accepted
 **Date:** 2026-10-11
+**Accepted:** 2026-10-14
 
 ## Context
 

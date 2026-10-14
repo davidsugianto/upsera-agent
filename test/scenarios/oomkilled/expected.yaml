@@ -24,8 +24,8 @@ must_not_conclude:
 # of these tools, and the cited output must match what the tool actually
 # returned during the run.
 required_evidence_from:
-  - describe_resource
-  - get_resource
+  - k8s_describe
+  - k8s_get
 
 expected_action:
   description: raise the memory limit above observed working set

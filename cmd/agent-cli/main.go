@@ -1,5 +1,5 @@
-// Command agent-cli is the command-line surface for k8s-triage-agent. In
-// Phase 0 it only reports its version; investigations arrive in a later phase.
+// Command agent-cli is the command-line surface for k8s-triage-agent. It
+// reports its version and runs read-only workload diagnoses without an LLM.
 package main
 
 import (
@@ -43,6 +43,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		}
 		fmt.Fprintf(stdout, "agent-cli %s\n", version)
 		return 0
+	case "diagnose":
+		return runDiagnose(rest[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "agent-cli: unknown command %q\n", rest[0])
 		usage(stderr)
@@ -51,5 +53,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 }
 
 func usage(w io.Writer) {
-	fmt.Fprint(w, "Usage: agent-cli <command>\n\nCommands:\n  version    print the version\n")
+	fmt.Fprint(w, "Usage: agent-cli <command>\n\nCommands:\n"+
+		"  diagnose   diagnose a workload: agent-cli diagnose <kind>/<name> -n <namespace> (see diagnose --help)\n"+
+		"  version    print the version\n")
 }
