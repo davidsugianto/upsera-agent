@@ -113,6 +113,8 @@ type Runner struct {
 	Interval    time.Duration
 	KubeContext string
 	Log         io.Writer
+	// LLM, when set, adds the model summary step after the deterministic diagnosis.
+	LLM *LLMMode
 }
 
 func (r *Runner) interval() time.Duration {
@@ -202,6 +204,15 @@ func (r *Runner) RunScenario(ctx context.Context, sc Scenario) (res Result) {
 	}
 	if !out.satisfied && !sc.ExpectNoFindings {
 		res.Detail = fmt.Sprintf("timed out after %ds; %s", sc.TimeoutSeconds, res.Detail)
+	}
+	if r.LLM != nil {
+		// The cluster state is stable once polling ends, so the model sees
+		// exactly what the deterministic score saw.
+		llmRes, err := r.summarize(ctx, sc, out, res)
+		if err != nil {
+			return fail("interrupted: %v", err)
+		}
+		res = llmRes
 	}
 	return res
 }

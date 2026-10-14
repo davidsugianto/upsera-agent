@@ -682,3 +682,303 @@ func TestDiagnoseReadsFailingInitContainerLogs(t *testing.T) {
 		t.Errorf("logs args = %v, want container=migrate, previous=true", m)
 	}
 }
+
+// capPod builds a pod for budget tests. ready and restarts drive the
+// unhealthiest-first ordering.
+func capPod(name, node string, ready bool, restarts int32) corev1.Pod {
+	status := corev1.ConditionTrue
+	if !ready {
+		status = corev1.ConditionFalse
+	}
+	cs := corev1.ContainerStatus{Name: "app", Ready: ready, RestartCount: restarts}
+	if !ready {
+		cs.State.Waiting = &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}
+	}
+	return corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "prod"},
+		Spec:       corev1.PodSpec{NodeName: node},
+		Status: corev1.PodStatus{
+			Phase:             corev1.PodRunning,
+			Conditions:        []corev1.PodCondition{{Type: corev1.PodReady, Status: status}},
+			ContainerStatuses: []corev1.ContainerStatus{cs},
+		},
+	}
+}
+
+// podsFixture serves pods (in the given order) through list and describe.
+func podsFixture(pods []corev1.Pod) *fixture {
+	f := newFixture()
+	f.list.fn = func(map[string]any) (tools.Result, error) {
+		return tools.Result{Summary: "pods", Data: append([]corev1.Pod(nil), pods...)}, nil
+	}
+	f.describe.fn = func(a map[string]any) (tools.Result, error) {
+		for _, p := range pods {
+			if p.Name == a["pod"] {
+				return tools.Result{Summary: "pod " + p.Name, Data: &p}, nil
+			}
+		}
+		return tools.Result{}, errors.New("no such pod")
+	}
+	return f
+}
+
+// calledPods returns the pod argument of every call, in order.
+func calledPods(t *testing.T, ft *fakeTool) []string {
+	t.Helper()
+	var out []string
+	for _, raw := range ft.calls {
+		var m map[string]any
+		if err := json.Unmarshal([]byte(raw), &m); err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, fmt.Sprint(m["pod"]))
+	}
+	return out
+}
+
+func totalCalls(f *fixture) int {
+	return f.get.callCount() + f.list.callCount() + f.describe.callCount() +
+		f.events.callCount() + f.logs.callCount() + f.rollout.callCount()
+}
+
+func hasUnknown(inv *domain.Investigation, parts ...string) bool {
+	for _, u := range inv.Unknowns {
+		ok := true
+		for _, p := range parts {
+			ok = ok && strings.Contains(u, p)
+		}
+		if ok {
+			return true
+		}
+	}
+	return false
+}
+
+func TestDiagnoseToolCallCapHonouredExactly(t *testing.T) {
+	stubDetectors(t, func(detect.Snapshot) []domain.Finding { return nil })
+	pods := []corev1.Pod{
+		capPod("p1", "node-a", false, 3), capPod("p2", "node-a", false, 2),
+		capPod("p3", "node-a", true, 0), capPod("p4", "node-a", true, 0), capPod("p5", "node-a", true, 0),
+	}
+	f := podsFixture(pods)
+	o := opts()
+	o.MaxToolCalls = 10
+
+	inv, err := Diagnose(context.Background(), f.reg, &memStore{}, o)
+	if err != nil {
+		t.Fatalf("Diagnose: %v", err)
+	}
+	// get + list, two full pods (6), then the reserved node read and rollout.
+	if inv.ToolCalls != 10 || totalCalls(f) != 10 {
+		t.Errorf("ToolCalls = %d, tool invocations = %d, want exactly 10", inv.ToolCalls, totalCalls(f))
+	}
+	if f.get.callCount() != 2 || f.rollout.callCount() != 1 {
+		t.Errorf("node/rollout reads were starved: get=%d rollout=%d", f.get.callCount(), f.rollout.callCount())
+	}
+	for _, name := range []string{"p3", "p4", "p5"} {
+		want := fmt.Sprintf("pod %s not inspected: tool call cap (10) reached", name)
+		if !hasUnknown(inv, want) {
+			t.Errorf("missing unknown %q in %v", want, inv.Unknowns)
+		}
+	}
+}
+
+func TestDiagnoseToolCallCapNeverExceeded(t *testing.T) {
+	stubDetectors(t, func(detect.Snapshot) []domain.Finding { return nil })
+	for limit := 1; limit <= 20; limit++ {
+		pods := []corev1.Pod{
+			capPod("p1", "node-a", false, 3), capPod("p2", "node-b", false, 1),
+			capPod("p3", "node-c", true, 0), capPod("p4", "node-a", true, 0),
+		}
+		f := podsFixture(pods)
+		o := opts()
+		o.MaxToolCalls = limit
+		inv, err := Diagnose(context.Background(), f.reg, &memStore{}, o)
+		if err != nil {
+			t.Fatalf("cap %d: %v", limit, err)
+		}
+		if inv.ToolCalls > limit || totalCalls(f) > limit {
+			t.Errorf("cap %d: ToolCalls = %d, invocations = %d", limit, inv.ToolCalls, totalCalls(f))
+		}
+		if inv.ToolCalls != totalCalls(f) {
+			t.Errorf("cap %d: ToolCalls = %d but %d tools were invoked", limit, inv.ToolCalls, totalCalls(f))
+		}
+	}
+}
+
+func TestDiagnoseToolCallCapPrefersUnhealthyPods(t *testing.T) {
+	stubDetectors(t, func(detect.Snapshot) []domain.Finding { return nil })
+	// The crashing pod is listed last, after three healthy ones.
+	pods := []corev1.Pod{
+		capPod("a-ok", "node-a", true, 0), capPod("b-ok", "node-a", true, 0),
+		capPod("c-ok", "node-a", true, 0), capPod("z-crash", "node-a", false, 5),
+	}
+	f := podsFixture(pods)
+	o := opts()
+	o.MaxToolCalls = 7 // get, list, one pod (3), node, rollout
+
+	inv, err := Diagnose(context.Background(), f.reg, &memStore{}, o)
+	if err != nil {
+		t.Fatalf("Diagnose: %v", err)
+	}
+	if got := calledPods(t, f.describe); len(got) != 1 || got[0] != "z-crash" {
+		t.Errorf("inspected %v, want only z-crash", got)
+	}
+	for _, name := range []string{"a-ok", "b-ok", "c-ok"} {
+		if !hasUnknown(inv, "pod "+name+" not inspected") {
+			t.Errorf("missing not-inspected unknown for %s: %v", name, inv.Unknowns)
+		}
+	}
+	if hasUnknown(inv, "pod z-crash") {
+		t.Errorf("inspected pod got a cap unknown: %v", inv.Unknowns)
+	}
+}
+
+func TestDiagnoseToolCallCapEssentialsAlwaysRun(t *testing.T) {
+	stubDetectors(t, func(detect.Snapshot) []domain.Finding { return nil })
+	pods := []corev1.Pod{capPod("p1", "node-a", false, 3), capPod("p2", "node-a", true, 0)}
+	f := podsFixture(pods)
+	o := opts()
+	o.MaxToolCalls = 2
+
+	inv, err := Diagnose(context.Background(), f.reg, &memStore{}, o)
+	if err != nil {
+		t.Fatalf("Diagnose: %v", err)
+	}
+	if f.get.callCount() != 1 || f.list.callCount() != 1 {
+		t.Errorf("workload get = %d, pod list = %d, want 1 each", f.get.callCount(), f.list.callCount())
+	}
+	if f.describe.callCount()+f.events.callCount()+f.logs.callCount()+f.rollout.callCount() != 0 {
+		t.Errorf("calls beyond the essentials with a cap of 2")
+	}
+	if inv.ToolCalls != 2 {
+		t.Errorf("ToolCalls = %d, want 2", inv.ToolCalls)
+	}
+	for _, name := range []string{"p1", "p2"} {
+		if !hasUnknown(inv, "pod "+name+" not inspected: tool call cap (2) reached") {
+			t.Errorf("missing unknown for %s: %v", name, inv.Unknowns)
+		}
+	}
+	if !hasUnknown(inv, toolRollout, "cap (2)") {
+		t.Errorf("skipped rollout_history should be an Unknown: %v", inv.Unknowns)
+	}
+}
+
+func TestDiagnoseToolCallCapOfOneStillReadsWorkload(t *testing.T) {
+	stubDetectors(t, func(detect.Snapshot) []domain.Finding { return nil })
+	f := podsFixture([]corev1.Pod{capPod("p1", "node-a", false, 1)})
+	o := opts()
+	o.MaxToolCalls = 1
+
+	inv, err := Diagnose(context.Background(), f.reg, &memStore{}, o)
+	if err != nil {
+		t.Fatalf("Diagnose: %v", err)
+	}
+	if f.get.callCount() != 1 || inv.ToolCalls != 1 || f.list.callCount() != 0 {
+		t.Errorf("get=%d list=%d ToolCalls=%d", f.get.callCount(), f.list.callCount(), inv.ToolCalls)
+	}
+	if !hasUnknown(inv, toolListPods, "cap (1)") {
+		t.Errorf("skipped pod list should be an Unknown: %v", inv.Unknowns)
+	}
+}
+
+func TestDiagnoseToolCallCapPartialPodIsUnknown(t *testing.T) {
+	stubDetectors(t, func(detect.Snapshot) []domain.Finding { return nil })
+	f := podsFixture([]corev1.Pod{capPod("p1", "node-a", false, 3)})
+	o := opts()
+	o.MaxToolCalls = 5 // get, list, describe, node, rollout: no room for events or logs
+
+	inv, err := Diagnose(context.Background(), f.reg, &memStore{}, o)
+	if err != nil {
+		t.Fatalf("Diagnose: %v", err)
+	}
+	if f.describe.callCount() != 1 || f.events.callCount() != 0 || f.logs.callCount() != 0 {
+		t.Errorf("describe=%d events=%d logs=%d", f.describe.callCount(), f.events.callCount(), f.logs.callCount())
+	}
+	if !hasUnknown(inv, "pod p1", "cap (5)") {
+		t.Errorf("a partly inspected pod must be reported: %v", inv.Unknowns)
+	}
+	if inv.ToolCalls != 5 {
+		t.Errorf("ToolCalls = %d, want 5", inv.ToolCalls)
+	}
+}
+
+func TestDiagnoseToolCallCapReservesNodeReadsPerInspectedNode(t *testing.T) {
+	var snap detect.Snapshot
+	stubDetectors(t, func(s detect.Snapshot) []domain.Finding { snap = s; return nil })
+	pods := []corev1.Pod{capPod("p1", "node-a", false, 3), capPod("p2", "node-b", false, 2)}
+	f := podsFixture(pods)
+	o := opts()
+	o.MaxToolCalls = 11 // get, list, 2 pods (6), 2 nodes, rollout
+
+	inv, err := Diagnose(context.Background(), f.reg, &memStore{}, o)
+	if err != nil {
+		t.Fatalf("Diagnose: %v", err)
+	}
+	if len(snap.Nodes) != 2 || snap.RevisionsEvidence == "" {
+		t.Errorf("nodes=%d revisions evidence=%q, want both node reads and the rollout", len(snap.Nodes), snap.RevisionsEvidence)
+	}
+	if inv.ToolCalls != 11 {
+		t.Errorf("ToolCalls = %d, want 11", inv.ToolCalls)
+	}
+	if len(inv.Unknowns) != 0 {
+		t.Errorf("unexpected unknowns: %v", inv.Unknowns)
+	}
+}
+
+func TestDiagnoseZeroCapIsUnlimited(t *testing.T) {
+	stubDetectors(t, func(detect.Snapshot) []domain.Finding { return nil })
+	pods := []corev1.Pod{
+		capPod("healthy", "node-a", true, 0), capPod("crash", "node-a", false, 4),
+		capPod("other", "node-a", true, 0), capPod("last", "node-a", true, 0),
+	}
+	f := podsFixture(pods)
+
+	inv, err := Diagnose(context.Background(), f.reg, &memStore{}, opts()) // MaxToolCalls: 0
+	if err != nil {
+		t.Fatalf("Diagnose: %v", err)
+	}
+	// get + list + 4 pods * 3 + node + rollout.
+	if inv.ToolCalls != 16 {
+		t.Errorf("ToolCalls = %d, want 16", inv.ToolCalls)
+	}
+	want := []string{"healthy", "crash", "other", "last"}
+	got := calledPods(t, f.describe)
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("inspection order = %v, want list order %v when uncapped", got, want)
+		}
+	}
+	if len(inv.Unknowns) != 0 {
+		t.Errorf("unexpected unknowns: %v", inv.Unknowns)
+	}
+}
+
+func TestPodsByUrgency(t *testing.T) {
+	pending := corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "pending"},
+		Status:     corev1.PodStatus{Phase: corev1.PodPending},
+	}
+	succeeded := capPod("done", "n", true, 0)
+	succeeded.Status.Phase = corev1.PodSucceeded
+	restarted := capPod("restarted", "n", true, 2)
+	notReady := capPod("not-ready", "n", false, 0)
+	notReady.Status.ContainerStatuses[0].State = corev1.ContainerState{}
+	crash := capPod("crash", "n", false, 9)
+
+	in := []corev1.Pod{capPod("b-ok", "n", true, 0), succeeded, restarted, capPod("a-ok", "n", true, 0), notReady, pending, crash}
+	got := podsByUrgency(in)
+	var names []string
+	for _, p := range got {
+		names = append(names, p.Name)
+	}
+	// Not ready first (restarts, then bad phase, then the rest), restarted next,
+	// then name order among the healthy.
+	want := []string{"crash", "pending", "not-ready", "restarted", "a-ok", "b-ok", "done"}
+	if fmt.Sprint(names) != fmt.Sprint(want) {
+		t.Errorf("order = %v, want %v", names, want)
+	}
+	if in[0].Name != "b-ok" {
+		t.Error("podsByUrgency must not reorder its input")
+	}
+}

@@ -28,6 +28,7 @@ Beyond the descriptive fields (`id`, `holdout`, `failure_class`, `root_cause`,
 | `expected_detectors` | Detectors that must all appear in the findings |
 | `forbidden_detectors` | Detectors that must not appear |
 | `cause_terms` | Case-insensitive substrings that must all appear in the findings' summary and quote |
+| `required_evidence_from` | Tool names; LLM mode needs the rank-1 hypothesis to cite evidence from at least one (not used by the deterministic score) |
 | `expect_no_findings` | Negative scenario: passes only with zero findings |
 | `lab_only` | Reported as skipped on kind, never applied |
 
@@ -48,6 +49,36 @@ says the right detectors fired, `cause_correct` also needs every `cause_terms`
 entry in the findings. A scenario whose cause is only visible somewhere the
 detectors do not read (`badconfig`, in the logs) is expected to fail on cause;
 that gap is what a model has to close.
+
+## LLM mode
+
+`make eval-llm` measures the model summary step against the deterministic
+baseline. It **spends real API money**: each scenario costs `--runs` model calls
+(default 3), each capped by `agent.max_llm_tokens`. It needs the API key in the
+environment variable named by `llm.api_key_env` in `deploy/dev/config.dev.yaml`
+(`ANTHROPIC_API_KEY` for the default provider), or for `anthropic` an
+`ANTHROPIC_AUTH_TOKEN` / `ant auth login` profile; without a credential the
+harness exits 1 before it touches the cluster. Run `make eval` first so `test/results/report.json`
+exists for the comparison table.
+
+Each scenario is applied and diagnosed once. The same Diagnose result and
+evidence then go to the model `--runs` times, so only model variance is
+measured. A run passes when the deterministic class is right, the rank-1
+hypothesis (statement plus disproof) contains every `cause_terms` entry and cites
+at least one stored evidence row produced by a tool listed in
+`required_evidence_from`, and every cited evidence ID exists in the evidence
+store. An empty or absent `required_evidence_from` is no requirement; the names
+must be tools the agent has (`k8s_get`, `k8s_list_pods`, `k8s_describe`,
+`k8s_events`, `pod_logs`, `rollout_history`) or `--validate` fails. A scenario
+passes when at least 2 of 3 runs pass; with fewer than 3 runs every run must pass.
+`expect_no_findings` scenarios never call the model.
+
+The report goes to `test/results/llm/report.json` (mode `llm`) so the
+deterministic baseline is not overwritten. It adds per-run results, rejected
+claims (claims dropped for lacking valid evidence), token counts and the
+rejected-claim rate. `--check` still works on it.
+
+The deterministic baseline stays the CI gate; LLM mode is run by hand, never in CI.
 
 ## Scoring
 

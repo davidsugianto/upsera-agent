@@ -1,8 +1,9 @@
 // Command harness is the Phase 1 evaluation harness: it applies each scenario
 // under test/scenarios to the kind lab cluster, waits for the fault to show,
 // runs the deterministic investigation.Diagnose with the read-only identity,
-// and scores the findings against expected.yaml. No model is involved; the
-// report is the baseline later model runs are compared with.
+// and scores the findings against expected.yaml. By default no model is
+// involved and the report is the baseline; with --llm each scenario's summary
+// step is measured against it.
 package main
 
 import (
@@ -14,6 +15,9 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+
+	"github.com/davidsugianto/upsera-agent/internal/agent/llm"
+	"github.com/davidsugianto/upsera-agent/internal/config"
 )
 
 const (
@@ -33,6 +37,10 @@ type options struct {
 	check           bool
 	minTop1         float64
 	validate        bool
+	llm             bool
+	config          string
+	runs            int
+	baseline        string
 }
 
 func main() {
@@ -51,10 +59,14 @@ type deps struct {
 	clock      Clock
 	// verifyServer proves the context points at a local cluster.
 	verifyServer func(kubeconfig, kubeContext string) error
+	// newLLM builds the model client for --llm; tests inject fakes.
+	newLLM func(cfg config.LLMConfig, getenv func(string) string) (llm.Client, error)
+	getenv func(string) string
 }
 
 func defaultDeps() deps {
-	return deps{kubectl: execKubectl{}, diagnosers: newClusterDiagnoserFactory, clock: realClock{}, verifyServer: verifyLoopbackServer}
+	return deps{kubectl: execKubectl{}, diagnosers: newClusterDiagnoserFactory, clock: realClock{}, verifyServer: verifyLoopbackServer,
+		newLLM: llm.New, getenv: os.Getenv}
 }
 
 func parseFlags(args []string, stderr io.Writer) (options, int, bool) {
@@ -70,6 +82,10 @@ func parseFlags(args []string, stderr io.Writer) (options, int, bool) {
 	fs.BoolVar(&o.check, "check", false, "read report.json from --report and exit 1 if the gate fails (no cluster)")
 	fs.Float64Var(&o.minTop1, "min-top1", 0.80, "minimum top1 for --check")
 	fs.BoolVar(&o.validate, "validate", false, "validate the scenario files and exit (no cluster)")
+	fs.BoolVar(&o.llm, "llm", false, "also run the model summary step and score it against the deterministic baseline; spends real API money")
+	fs.StringVar(&o.config, "config", "deploy/dev/config.dev.yaml", "agent config file; with --llm it supplies llm.provider, llm.planner_model, llm.api_key_env and agent.max_llm_tokens")
+	fs.IntVar(&o.runs, "runs", 3, "with --llm: model runs per scenario (a scenario passes with 2 of 3; fewer than 3 runs must all pass)")
+	fs.StringVar(&o.baseline, "baseline", "", "with --llm: deterministic report.json to print per-scenario deltas against")
 	fs.Usage = func() {
 		fmt.Fprint(stderr, "Usage: harness [flags]\n\n"+
 			"Run the diagnosis scenarios against the kind lab cluster and score them.\n"+
@@ -93,6 +109,14 @@ func parseFlags(args []string, stderr io.Writer) (options, int, bool) {
 	}
 	if o.check && o.validate {
 		fmt.Fprintln(stderr, "harness: --check and --validate cannot be combined")
+		return o, exitUsage, false
+	}
+	if o.llm && (o.check || o.validate) {
+		fmt.Fprintln(stderr, "harness: --llm cannot be combined with --check or --validate")
+		return o, exitUsage, false
+	}
+	if o.llm && o.runs < 1 {
+		fmt.Fprintf(stderr, "harness: --runs must be at least 1, got %d\n", o.runs)
 		return o, exitUsage, false
 	}
 	return o, exitOK, true
@@ -142,7 +166,48 @@ func runCheck(o options, stdout, stderr io.Writer) int {
 	return exitOK
 }
 
+// llmSetup is what --llm needs before it may touch the cluster.
+type llmSetup struct {
+	mode     *LLMMode
+	baseline *Report
+}
+
+// setupLLM resolves the model client and the optional baseline. It runs before
+// any cluster command so a missing API key costs nothing.
+func setupLLM(o options, d deps, stderr io.Writer) (*llmSetup, bool) {
+	cfg, err := config.Load(o.config)
+	if err != nil {
+		fmt.Fprintf(stderr, "harness: %v\n", err)
+		return nil, false
+	}
+	client, err := d.newLLM(cfg.LLM, d.getenv)
+	if err != nil {
+		fmt.Fprintf(stderr, "harness: %v\n", err)
+		return nil, false
+	}
+	setup := &llmSetup{mode: &LLMMode{
+		Client: client, Model: cfg.LLM.PlannerModel, MaxTokens: cfg.Agent.MaxLLMTokens, Runs: o.runs,
+	}}
+	if o.baseline != "" {
+		base, err := ReadReportFile(o.baseline)
+		if err != nil {
+			fmt.Fprintf(stderr, "harness: --baseline: %v\n", err)
+			return nil, false
+		}
+		setup.baseline = &base
+	}
+	return setup, true
+}
+
 func runEval(ctx context.Context, o options, stdout, stderr io.Writer, d deps) int {
+	var lm *llmSetup
+	if o.llm {
+		var ok bool
+		if lm, ok = setupLLM(o, d, stderr); !ok {
+			return exitFailures
+		}
+	}
+
 	// Refuse a non-kind context before reading or running anything else.
 	drv, err := NewDriver(d.kubectl, o.adminKubeconfig, o.kubeContext)
 	if err != nil {
@@ -185,6 +250,9 @@ func runEval(ctx context.Context, o options, stdout, stderr io.Writer, d deps) i
 		KubeContext: o.kubeContext,
 		Log:         stderr,
 	}
+	if lm != nil {
+		r.LLM = lm.mode
+	}
 	results, err := r.RunAll(ctx, scs)
 	if err != nil {
 		// A partial report would look like a complete one to --check.
@@ -192,14 +260,33 @@ func runEval(ctx context.Context, o options, stdout, stderr io.Writer, d deps) i
 		return exitFailures
 	}
 
-	rep := BuildReport(results, d.clock.Now())
+	var rep Report
+	if lm != nil {
+		rep = BuildLLMReport(results, d.clock.Now(), lm.mode.Model, lm.mode.Runs)
+	} else {
+		rep = BuildReport(results, d.clock.Now())
+	}
 	path, err := WriteReport(o.report, rep)
 	if err != nil {
 		fmt.Fprintf(stderr, "harness: %v\n", err)
 		return exitFailures
 	}
-	PrintTable(stdout, rep)
+	if lm != nil {
+		PrintLLMTable(stdout, rep)
+		if lm.baseline != nil {
+			fmt.Fprintln(stdout)
+			PrintBaseline(stdout, rep, *lm.baseline)
+		}
+	} else {
+		PrintTable(stdout, rep)
+	}
 	fmt.Fprintf(stdout, "report: %s\n", path)
+	// Poor answers are data, but a model that never answered (bad key, outage)
+	// measured nothing: that is a failed run.
+	if attempted, failed, first := modelCallFailures(rep); attempted > 0 && failed == attempted {
+		fmt.Fprintf(stderr, "harness: every model call failed (first error: %s)\n", first)
+		return exitFailures
+	}
 	// Failing scenarios are results, not a failed run: --check decides the gate.
 	// Some fail by design until a model can read the logs.
 	return exitOK

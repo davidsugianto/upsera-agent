@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -27,6 +28,8 @@ type Options struct {
 	Namespace string
 	Name      string
 	TailLines int64 // 0 means 100
+	// MaxToolCalls caps Investigation.ToolCalls (INV-2); 0 means unlimited.
+	MaxToolCalls int
 }
 
 // runDetectors is a seam so tests can assert on evidence wiring without
@@ -75,10 +78,10 @@ func Diagnose(ctx context.Context, reg *tools.Registry, store EvidenceStore, opt
 		tail = defaultTailLines
 	}
 
-	c := &collector{ctx: ctx, reg: reg, store: store, invID: id}
+	c := &collector{ctx: ctx, reg: reg, store: store, invID: id, max: opts.MaxToolCalls}
 	start := time.Now().UTC()
 
-	// Workload: nothing else can be done without it.
+	// Workload: nothing else can be done without it. A cap of 1 still lets it run.
 	var snap detect.Snapshot
 	res, evID, err := c.call(toolGet, map[string]any{"kind": kind, "namespace": opts.Namespace, "name": opts.Name})
 	if err != nil {
@@ -90,6 +93,14 @@ func Diagnose(ctx context.Context, reg *tools.Registry, store EvidenceStore, opt
 	}
 	snap.Workload, snap.WorkloadEvidence = wl, evID
 
+	// Calls kept back for the reads that follow the pods: the rollout history
+	// and one node read per inspected node. Spending the whole cap on pods would
+	// leave the node and rollout detectors with nothing to look at.
+	tailReserve := 0
+	if kind == "deployment" {
+		tailReserve = 1
+	}
+
 	if len(wl.Selector) == 0 {
 		c.unknown("%s has no pod selector; pods not inspected", target)
 	} else {
@@ -97,10 +108,24 @@ func Diagnose(ctx context.Context, reg *tools.Registry, store EvidenceStore, opt
 		if err != nil {
 			return nil, err
 		}
+		if c.max > 0 {
+			pods = podsByUrgency(pods)
+		}
+		nodes := map[string]bool{}
 		for _, p := range pods {
-			obs, err := c.observePod(opts.Namespace, p, tail)
+			reserve := tailReserve + len(nodes)
+			if n := p.Spec.NodeName; n != "" && !nodes[n] {
+				reserve++
+			}
+			obs, inspected, err := c.observePod(opts.Namespace, p, tail, reserve)
 			if err != nil {
 				return nil, err
+			}
+			if !inspected {
+				continue
+			}
+			if n := p.Spec.NodeName; n != "" {
+				nodes[n] = true
 			}
 			snap.Pods = append(snap.Pods, obs)
 		}
@@ -110,6 +135,10 @@ func Diagnose(ctx context.Context, reg *tools.Registry, store EvidenceStore, opt
 	}
 
 	for _, node := range distinctNodes(snap.Pods) {
+		if !c.affordable(tailReserve) {
+			c.unknown("%s node/%s not read: tool call cap (%d) reached", toolGet, node, c.max)
+			continue
+		}
 		res, evID, err := c.call(toolGet, map[string]any{"kind": "node", "name": node})
 		if err != nil {
 			if c.fatal != nil {
@@ -127,17 +156,21 @@ func Diagnose(ctx context.Context, reg *tools.Registry, store EvidenceStore, opt
 	}
 
 	if kind == "deployment" {
-		res, evID, err := c.call(toolRollout, map[string]any{"namespace": opts.Namespace, "name": opts.Name})
-		switch {
-		case c.fatal != nil:
-			return nil, c.fatal
-		case err != nil:
-			c.unknown("%s %s: %v", toolRollout, target, err)
-		default:
-			if revs, ok := res.Data.([]kube.Revision); ok {
-				snap.Revisions, snap.RevisionsEvidence = revs, evID
-			} else {
-				c.unknown("%s %s: unexpected %T", toolRollout, target, res.Data)
+		if !c.affordable(0) {
+			c.unknown("%s %s not read: tool call cap (%d) reached", toolRollout, target, c.max)
+		} else {
+			res, evID, err := c.call(toolRollout, map[string]any{"namespace": opts.Namespace, "name": opts.Name})
+			switch {
+			case c.fatal != nil:
+				return nil, c.fatal
+			case err != nil:
+				c.unknown("%s %s: %v", toolRollout, target, err)
+			default:
+				if revs, ok := res.Data.([]kube.Revision); ok {
+					snap.Revisions, snap.RevisionsEvidence = revs, evID
+				} else {
+					c.unknown("%s %s: unexpected %T", toolRollout, target, res.Data)
+				}
 			}
 		}
 	}
@@ -170,11 +203,23 @@ type collector struct {
 	reg   *tools.Registry
 	store EvidenceStore
 	invID string
+	max   int // INV-2 cap on calls; 0 means unlimited
 
 	calls    int
 	nextID   int
 	unknowns []string
 	fatal    error
+}
+
+// errCapReached is returned by call instead of running a tool once the cap is
+// spent. It is a backstop: callers check affordable first so that the cap is
+// never exceeded and reserved calls are not eaten by earlier reads.
+var errCapReached = errors.New("tool call cap reached")
+
+// affordable reports whether one more call fits while keeping reserve calls
+// back for later reads.
+func (c *collector) affordable(reserve int) bool {
+	return c.max == 0 || c.max-c.calls-reserve >= 1
 }
 
 // call runs one tool and stores its summary as evidence. The returned ID is
@@ -195,6 +240,9 @@ func (c *collector) call(name string, args map[string]any) (tools.Result, string
 		return tools.Result{}, "", c.fatal
 	}
 
+	if !c.affordable(0) {
+		return tools.Result{}, "", errCapReached
+	}
 	c.calls++
 	res, err := t.Call(c.ctx, raw)
 	if err != nil {
@@ -252,6 +300,10 @@ func sanitizeFindings(fs []domain.Finding) []domain.Finding {
 
 // pods lists the workload's pods. A failed listing is an Unknown, not fatal.
 func (c *collector) pods(ns string, selector map[string]string) ([]corev1.Pod, error) {
+	if !c.affordable(0) {
+		c.unknown("%s not run: tool call cap (%d) reached", toolListPods, c.max)
+		return nil, nil
+	}
 	res, _, err := c.call(toolListPods, map[string]any{"namespace": ns, "selector": selector})
 	if c.fatal != nil {
 		return nil, c.fatal
@@ -271,14 +323,39 @@ func (c *collector) pods(ns string, selector map[string]string) ([]corev1.Pod, e
 // observePod gathers describe, events and logs for one pod. The listed pod is
 // kept as a fallback so node lookup and log selection still work when describe
 // fails, but its EvidenceID stays empty so detectors will not cite it.
-func (c *collector) observePod(ns string, listed corev1.Pod, tail int64) (detect.PodObs, error) {
-	obs := detect.PodObs{Pod: &listed}
+//
+// reserve is how many calls must stay available for later reads. When the cap
+// stops a call the pod is reported as an Unknown; inspected is false only when
+// not even describe ran, so the caller leaves such a pod out of the snapshot.
+func (c *collector) observePod(ns string, listed corev1.Pod, tail int64, reserve int) (obs detect.PodObs, inspected bool, err error) {
+	obs = detect.PodObs{Pod: &listed}
 	name := listed.Name
 
+	// capped reports whether the next call must be skipped, recording why.
+	capped := false
+	skip := func() bool {
+		if c.affordable(reserve) {
+			return false
+		}
+		if !capped {
+			capped = true
+			if inspected {
+				c.unknown("pod %s partially inspected: tool call cap (%d) reached", name, c.max)
+			} else {
+				c.unknown("pod %s not inspected: tool call cap (%d) reached", name, c.max)
+			}
+		}
+		return true
+	}
+
+	if skip() {
+		return obs, false, nil
+	}
+	inspected = true
 	res, evID, err := c.call(toolDescribe, map[string]any{"namespace": ns, "pod": name})
 	switch {
 	case c.fatal != nil:
-		return obs, c.fatal
+		return obs, inspected, c.fatal
 	case err != nil:
 		c.unknown("%s pod/%s: %v", toolDescribe, name, err)
 	default:
@@ -289,10 +366,13 @@ func (c *collector) observePod(ns string, listed corev1.Pod, tail int64) (detect
 		}
 	}
 
+	if skip() {
+		return obs, inspected, nil
+	}
 	res, evID, err = c.call(toolEvents, map[string]any{"namespace": ns, "name": name})
 	switch {
 	case c.fatal != nil:
-		return obs, c.fatal
+		return obs, inspected, c.fatal
 	case err != nil:
 		c.unknown("%s pod/%s: %v", toolEvents, name, err)
 	default:
@@ -303,6 +383,9 @@ func (c *collector) observePod(ns string, listed corev1.Pod, tail int64) (detect
 		}
 	}
 
+	if skip() {
+		return obs, inspected, nil
+	}
 	container, previous := logTarget(obs.Pod)
 	args := map[string]any{"namespace": ns, "pod": name, "previous": previous, "tail_lines": tail}
 	if container != "" {
@@ -311,7 +394,7 @@ func (c *collector) observePod(ns string, listed corev1.Pod, tail int64) (detect
 	res, evID, err = c.call(toolLogs, args)
 	switch {
 	case c.fatal != nil:
-		return obs, c.fatal
+		return obs, inspected, c.fatal
 	case err != nil:
 		c.unknown("%s pod/%s: %v", toolLogs, name, err)
 	default:
@@ -321,7 +404,81 @@ func (c *collector) observePod(ns string, listed corev1.Pod, tail int64) (detect
 			c.unknown("%s pod/%s: unexpected %T", toolLogs, name, res.Data)
 		}
 	}
-	return obs, nil
+	return obs, inspected, nil
+}
+
+// podsByUrgency returns a copy of pods ordered so the ones most likely to
+// explain a failure are inspected first when the call cap cannot cover them
+// all: not Ready, restarted, phase other than Running/Succeeded, a container
+// waiting or terminated badly, then by name for a stable order.
+func podsByUrgency(pods []corev1.Pod) []corev1.Pod {
+	type ranked struct {
+		pod  corev1.Pod
+		keys [4]bool
+	}
+	rs := make([]ranked, len(pods))
+	for i, p := range pods {
+		rs[i] = ranked{pod: p, keys: [4]bool{!podReady(p), podRestarted(p), podPhaseOff(p), podContainerOff(p)}}
+	}
+	sort.SliceStable(rs, func(i, j int) bool {
+		for k := range rs[i].keys {
+			if rs[i].keys[k] != rs[j].keys[k] {
+				return rs[i].keys[k]
+			}
+		}
+		return rs[i].pod.Name < rs[j].pod.Name
+	})
+	out := make([]corev1.Pod, len(rs))
+	for i, r := range rs {
+		out[i] = r.pod
+	}
+	return out
+}
+
+// podReady uses the Ready condition and falls back to container readiness for
+// a pod that has not reported conditions yet.
+func podReady(p corev1.Pod) bool {
+	for _, cond := range p.Status.Conditions {
+		if cond.Type == corev1.PodReady {
+			return cond.Status == corev1.ConditionTrue
+		}
+	}
+	if len(p.Status.ContainerStatuses) == 0 {
+		return false
+	}
+	for _, cs := range p.Status.ContainerStatuses {
+		if !cs.Ready {
+			return false
+		}
+	}
+	return true
+}
+
+func podRestarted(p corev1.Pod) bool {
+	for _, cs := range append(append([]corev1.ContainerStatus(nil), p.Status.InitContainerStatuses...), p.Status.ContainerStatuses...) {
+		if cs.RestartCount > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func podPhaseOff(p corev1.Pod) bool {
+	return p.Status.Phase != corev1.PodRunning && p.Status.Phase != corev1.PodSucceeded
+}
+
+// podContainerOff is true for a container that is waiting or that exited
+// non-zero. A clean exit is normal for a completed pod.
+func podContainerOff(p corev1.Pod) bool {
+	for _, cs := range append(append([]corev1.ContainerStatus(nil), p.Status.InitContainerStatuses...), p.Status.ContainerStatuses...) {
+		if cs.State.Waiting != nil {
+			return true
+		}
+		if t := cs.State.Terminated; t != nil && t.ExitCode != 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // logTarget picks the container whose logs explain the failure. A restarted

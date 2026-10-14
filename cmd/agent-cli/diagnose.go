@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/davidsugianto/upsera-agent/internal/agent/llm"
 	"github.com/davidsugianto/upsera-agent/internal/agent/tools"
 	k8stools "github.com/davidsugianto/upsera-agent/internal/agent/tools/k8s"
 	"github.com/davidsugianto/upsera-agent/internal/config"
@@ -25,8 +26,21 @@ import (
 // cluster or a database, so tests can run the whole command without either.
 type diagnoser interface {
 	Diagnose(ctx context.Context, opts investigation.Options) (*domain.Investigation, error)
+	// Evidence returns the rows stored for one investigation, which is what the
+	// summary step is allowed to cite.
+	Evidence(ctx context.Context, investigationID string) ([]domain.Evidence, error)
 	Close() error
 }
+
+// newLLMClient builds the model client for --summarize. It fails when the API
+// key variable named in the config is unset, which is why callers use it before
+// any cluster work. Tests replace it.
+var newLLMClient = func(cfg config.LLMConfig) (llm.Client, error) {
+	return llm.New(cfg, os.Getenv)
+}
+
+// summarize is the summary step; a seam so command tests need no model output.
+var summarize = investigation.Summarize
 
 // newDiagnoser builds the real cluster-backed diagnoser. It opens the evidence
 // database, so callers must have checked the namespace first. Tests replace it.
@@ -55,6 +69,10 @@ type clusterDiagnoser struct {
 
 func (d *clusterDiagnoser) Diagnose(ctx context.Context, opts investigation.Options) (*domain.Investigation, error) {
 	return investigation.Diagnose(ctx, d.reg, d.store, opts)
+}
+
+func (d *clusterDiagnoser) Evidence(ctx context.Context, investigationID string) ([]domain.Evidence, error) {
+	return d.store.List(ctx, investigationID)
 }
 
 func (d *clusterDiagnoser) Close() error { return d.store.Close() }
@@ -118,6 +136,7 @@ func runDiagnose(args []string, stdout, stderr io.Writer) int {
 	kubeconfig := fs.String("kubeconfig", "", "kubeconfig path (default: KUBECONFIG or ~/.kube/config)")
 	evidenceDB := fs.String("evidence-db", defaultEvidenceDB(), "path to the SQLite evidence database")
 	asJSON := fs.Bool("json", false, "print the investigation as JSON")
+	summarizeFlag := fs.Bool("summarize", false, "ask the configured model for ranked hypotheses that cite the evidence (needs the API key variable named by llm.api_key_env, ANTHROPIC_AUTH_TOKEN, or an `ant auth login` profile)")
 	fs.Usage = func() {
 		fmt.Fprint(stderr, "Usage: agent-cli diagnose <kind>/<name> -n <namespace> [flags]\n\n"+
 			"Diagnose one workload (deploy/NAME, sts/NAME, ds/NAME) with read-only checks.\n\nFlags:\n")
@@ -178,6 +197,19 @@ func runDiagnose(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
+	// A missing API key is a configuration problem; find out before the cluster
+	// is touched or the evidence database exists.
+	var summaryClient *llm.Budgeted
+	if *summarizeFlag {
+		client, err := newLLMClient(cfg.LLM)
+		if err != nil {
+			fmt.Fprintf(stderr, "agent-cli: %v\n", err)
+			return 1
+		}
+		// One model call per investigation (INV-2); the token budget bounds it.
+		summaryClient = llm.NewBudgeted(client, llm.Budget{MaxCalls: 1, MaxTokens: cfg.Agent.MaxLLMTokens})
+	}
+
 	d, err := newDiagnoser(cl, *kubeconfig, *evidenceDB)
 	if err != nil {
 		fmt.Fprintf(stderr, "agent-cli: %v\n", err)
@@ -189,6 +221,7 @@ func runDiagnose(args []string, stdout, stderr io.Writer) int {
 	defer stop()
 	inv, err := d.Diagnose(ctx, investigation.Options{
 		Cluster: cl.Name, Kind: kind, Namespace: *namespace, Name: name,
+		MaxToolCalls: cfg.Agent.MaxToolCalls,
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "agent-cli: diagnose %s/%s: %v\n", kind, name, err)
@@ -199,6 +232,11 @@ func runDiagnose(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
+	var note *summaryNote
+	if summaryClient != nil {
+		note = applySummary(ctx, d, summaryClient, cfg.LLM.PlannerModel, inv)
+	}
+
 	if *asJSON {
 		// Stable shape for consumers: empty arrays, never null.
 		if inv.Findings == nil {
@@ -207,7 +245,21 @@ func runDiagnose(args []string, stdout, stderr io.Writer) int {
 		if inv.Unknowns == nil {
 			inv.Unknowns = []string{}
 		}
-		b, err := json.MarshalIndent(inv, "", "  ")
+		if inv.Hypotheses == nil {
+			inv.Hypotheses = []domain.Hypothesis{}
+		}
+		if inv.RuledOut == nil {
+			inv.RuledOut = []domain.RuledOut{}
+		}
+		out := struct {
+			*domain.Investigation
+			RejectedClaims int    `json:"rejected_claims,omitempty"`
+			Degraded       string `json:"degraded,omitempty"`
+		}{Investigation: inv}
+		if note != nil {
+			out.RejectedClaims, out.Degraded = note.rejected, note.degraded
+		}
+		b, err := json.MarshalIndent(out, "", "  ")
 		if err != nil {
 			fmt.Fprintf(stderr, "agent-cli: encode result: %v\n", err)
 			return 1
@@ -215,11 +267,58 @@ func runDiagnose(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "%s\n", b)
 		return 0
 	}
-	printInvestigation(stdout, inv, kind, name, *namespace, *evidenceDB)
+	printInvestigation(stdout, inv, note, kind, name, *namespace, *evidenceDB)
 	return 0
 }
 
-func printInvestigation(w io.Writer, inv *domain.Investigation, kind, name, namespace, evidenceDB string) {
+// summaryNote carries what the summary step reports besides the fields it sets
+// on the investigation.
+type summaryNote struct {
+	rejected int    // claims dropped for lacking a valid citation
+	degraded string // why the model's output was not used; empty when it was
+}
+
+// applySummary runs the single model call and folds the result into inv. Any
+// failure degrades to the deterministic findings: the run is still useful and
+// the diagnosis already succeeded, so it is not an error.
+func applySummary(ctx context.Context, d diagnoser, client *llm.Budgeted, model string, inv *domain.Investigation) *summaryNote {
+	evidence, err := d.Evidence(ctx, inv.ID)
+	if err != nil {
+		return &summaryNote{degraded: fmt.Sprintf("could not read stored evidence: %v", err)}
+	}
+	sum, err := summarize(ctx, client, inv, evidence, investigation.SummaryOptions{Model: model})
+	if err != nil || sum == nil {
+		note := &summaryNote{}
+		switch {
+		case errors.Is(err, llm.ErrBudgetExceeded):
+			note.degraded = "model budget exceeded"
+		case err != nil:
+			note.degraded = fmt.Sprintf("summary failed: %v", err)
+		default:
+			note.degraded = "summary returned nothing"
+		}
+		// A call that was made but failed still spent tokens.
+		if calls, used := client.Used(); calls > 0 {
+			inv.LLM = &domain.LLMUsage{Model: model, Calls: calls, InputTokens: used.InputTokens, OutputTokens: used.OutputTokens}
+		}
+		return note
+	}
+
+	note := &summaryNote{rejected: len(sum.Rejected), degraded: sum.Degraded}
+	if sum.Degraded == "" {
+		inv.Hypotheses = sum.Hypotheses
+		inv.RuledOut = sum.RuledOut
+		inv.Unknowns = append(inv.Unknowns, sum.Unknowns...)
+	}
+	usedModel := sum.Model
+	if usedModel == "" {
+		usedModel = model
+	}
+	inv.LLM = &domain.LLMUsage{Model: usedModel, Calls: 1, InputTokens: sum.Usage.InputTokens, OutputTokens: sum.Usage.OutputTokens}
+	return note
+}
+
+func printInvestigation(w io.Writer, inv *domain.Investigation, note *summaryNote, kind, name, namespace, evidenceDB string) {
 	fmt.Fprintf(w, "cluster:       %s\n", inv.Cluster)
 	fmt.Fprintf(w, "target:        %s/%s (namespace %s)\n", kind, name, namespace)
 	fmt.Fprintf(w, "investigation: %s\n\n", inv.ID)
@@ -235,11 +334,39 @@ func printInvestigation(w io.Writer, inv *domain.Investigation, kind, name, name
 		fmt.Fprintf(w, "  evidence: %s\n", strings.Join(f.EvidenceIDs, ", "))
 	}
 
+	if len(inv.Hypotheses) > 0 {
+		fmt.Fprintln(w, "\nHypotheses:")
+		for _, h := range inv.Hypotheses {
+			fmt.Fprintf(w, "  %d. [%s] %s\n", h.Rank, h.Confidence, h.Statement)
+			fmt.Fprintf(w, "     evidence: %s\n", strings.Join(h.EvidenceIDs, ", "))
+			if h.Disproof != "" {
+				fmt.Fprintf(w, "     would be disproved by: %s\n", h.Disproof)
+			}
+		}
+	}
+	if len(inv.RuledOut) > 0 {
+		fmt.Fprintln(w, "\nRuled out:")
+		for _, r := range inv.RuledOut {
+			fmt.Fprintf(w, "  - %s: %s (evidence: %s)\n", r.Statement, r.Reason, strings.Join(r.EvidenceIDs, ", "))
+		}
+	}
+	if note != nil {
+		if note.rejected > 0 {
+			fmt.Fprintf(w, "\nrejected claims: %d\n", note.rejected)
+		}
+		if note.degraded != "" {
+			fmt.Fprintf(w, "\ndegraded: %s\n", note.degraded)
+		}
+	}
+
 	if len(inv.Unknowns) > 0 {
 		fmt.Fprintln(w, "\nUnknowns:")
 		for _, u := range inv.Unknowns {
 			fmt.Fprintf(w, "  - %s\n", u)
 		}
+	}
+	if inv.LLM != nil {
+		fmt.Fprintf(w, "\nllm: %s, tokens %d in / %d out\n", inv.LLM.Model, inv.LLM.InputTokens, inv.LLM.OutputTokens)
 	}
 	fmt.Fprintf(w, "\nevidence db: %s\n", evidenceDB)
 }

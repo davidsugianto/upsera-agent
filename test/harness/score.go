@@ -27,6 +27,9 @@ type Result struct {
 	ToolCalls         int              `json:"tool_calls"`
 	DurationMS        int64            `json:"duration_ms"`
 	Detail            string           `json:"detail,omitempty"`
+	// LLMResult is set only in LLM mode; being embedded by pointer, it adds
+	// its fields to the row and leaves deterministic reports unchanged.
+	*LLMResult
 }
 
 // skippedResult is the row for a scenario the harness never applied.
