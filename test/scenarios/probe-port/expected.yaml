@@ -1,0 +1,40 @@
+id: probe-port
+holdout: false
+failure_class: rollout
+namespace: scenario-probe-port
+target: deployment/web
+# The pod is Running but never Ready, so the Deployment never becomes
+# Available. Single apply step, so nothing waits on its rollout.
+apply: [manifest.yaml]
+timeout_seconds: 240
+expected_detectors: [probe_failure]
+forbidden_detectors: [crashloop, oomkilled, image_pull]
+cause_terms: ["probe"]
+expect_no_findings: false
+lab_only: false
+
+root_cause:
+  summary: >
+    The readiness probe targets port 8081 but nginx listens on port 80, so the
+    probe always fails and the pod never becomes Ready (the Service has no
+    endpoints).
+
+must_mention:
+  - readiness probe
+  - port 8081
+  - nginx listens on 80
+
+must_not_conclude:
+  - application crash
+  - image pull failure
+  - Service selector mismatch
+
+required_evidence_from:
+  - k8s_describe
+  - k8s_events
+
+expected_action:
+  description: change the readiness probe port to 80
+  risk: low
+
+max_tool_calls: 10

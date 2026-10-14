@@ -1,0 +1,37 @@
+id: unschedulable
+holdout: false
+failure_class: scheduling
+namespace: scenario-unschedulable
+target: deployment/big
+apply: [manifest.yaml]
+timeout_seconds: 240
+expected_detectors: [unschedulable]
+forbidden_detectors: [crashloop, image_pull]
+cause_terms: ["insufficient"]
+expect_no_findings: false
+lab_only: false
+
+root_cause:
+  summary: >
+    The pod requests 64 CPU and 512Gi of memory, more than any node can
+    provide, so the scheduler reports Insufficient cpu and memory and the pod
+    stays Pending.
+
+must_mention:
+  - Insufficient cpu OR Insufficient memory
+  - resource requests exceed node capacity
+
+must_not_conclude:
+  - image pull failure
+  - application crash
+  - taints or node selectors
+
+required_evidence_from:
+  - k8s_describe
+  - k8s_events
+
+expected_action:
+  description: lower the resource requests to fit the nodes, or add larger nodes
+  risk: low
+
+max_tool_calls: 8

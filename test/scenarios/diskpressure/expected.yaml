@@ -1,0 +1,36 @@
+id: diskpressure
+holdout: false
+failure_class: resource_pressure
+namespace: scenario-diskpressure
+target: deployment/logger
+apply: [manifest.yaml]
+timeout_seconds: 240
+expected_detectors: [evicted]
+forbidden_detectors: []
+cause_terms: []
+expect_no_findings: false
+# Needs a node filled to DiskPressure; never applied on kind.
+lab_only: true
+
+root_cause:
+  summary: >
+    The node is under DiskPressure, so the kubelet evicts pods to reclaim
+    ephemeral storage.
+
+must_mention:
+  - Evicted
+  - DiskPressure OR ephemeral storage
+
+must_not_conclude:
+  - application crash
+  - OOMKilled
+
+required_evidence_from:
+  - k8s_describe
+  - k8s_events
+
+expected_action:
+  description: free disk on the node and set ephemeral-storage requests and limits
+  risk: medium
+
+max_tool_calls: 10

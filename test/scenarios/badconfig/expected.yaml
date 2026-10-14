@@ -1,0 +1,40 @@
+id: badconfig
+holdout: false
+failure_class: crashloop
+namespace: scenario-badconfig
+target: deployment/api
+apply: [manifest.yaml]
+timeout_seconds: 240
+expected_detectors: [crashloop]
+forbidden_detectors: [oomkilled]
+# Only the container log names APP_MODE; the deterministic detectors do not
+# read logs, so this is expected to FAIL on the baseline.
+cause_terms: ["APP_MODE"]
+expect_no_findings: false
+lab_only: false
+
+root_cause:
+  summary: >
+    The ConfigMap key was renamed from APP_MODE to app_mode, so the optional
+    configMapKeyRef resolves to nothing and the application exits 1 because
+    the required env APP_MODE is missing.
+
+must_mention:
+  - APP_MODE
+  - ConfigMap key renamed OR missing key
+  - exit code 1
+
+must_not_conclude:
+  - OOMKilled
+  - image pull failure
+  - node problem
+
+required_evidence_from:
+  - k8s_describe
+  - pod_logs
+
+expected_action:
+  description: point the env at the key app_mode (or restore the key APP_MODE in the ConfigMap)
+  risk: low
+
+max_tool_calls: 10

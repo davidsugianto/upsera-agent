@@ -26,7 +26,9 @@ func TestProbeFailure(t *testing.T) {
 		want []want
 	}{
 		{"healthy pod", snap(podObs("E2", testPod("api-1"))), nil},
-		{"readiness event", snap(withEvents("E3", ev("Unhealthy", readiness), testPod("api-1"))),
+		// A startup blip leaves a readiness event behind after the pod recovers.
+		{"readiness event on a pod that is Ready now", snap(withEvents("E3", ev("Unhealthy", readiness), testPod("api-1"))), nil},
+		{"readiness event on a pod that is not Ready", snap(withEvents("E3", ev("Unhealthy", readiness), testPod("api-1", notReady))),
 			[]want{{"pod/api-1", []string{"E2", "E3"}, "probe", readiness}}},
 		{"liveness event", snap(withEvents("E3", ev("Unhealthy", "Liveness probe failed: connection refused"), testPod("api-1"))),
 			[]want{{"pod/api-1", []string{"E2", "E3"}, "probe", "Liveness probe failed"}}},

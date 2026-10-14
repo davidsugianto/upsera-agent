@@ -1,0 +1,46 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: scenario-badconfig
+---
+# The key was renamed from APP_MODE to app_mode, but the Deployment still
+# references the old name.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+  namespace: scenario-badconfig
+data:
+  app_mode: production
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+  namespace: scenario-badconfig
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: api
+  template:
+    metadata:
+      labels:
+        app: api
+    spec:
+      containers:
+        - name: app
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - 'test -n "$APP_MODE" || { echo "missing required env APP_MODE" >&2; exit 1; }; sleep 3600'
+          env:
+            - name: APP_MODE
+              valueFrom:
+                configMapKeyRef:
+                  name: app-config
+                  key: APP_MODE
+                  # optional keeps the pod starting, so the failure surfaces
+                  # only in the application's own log line, not in pod events.
+                  optional: true

@@ -8,9 +8,46 @@ Each scenario is a directory containing:
 
 | File | Purpose |
 |------|---------|
-| `manifest.yaml` | The broken state, applied to a throwaway kind cluster |
-| `expected.yaml` | Known root cause, acceptable hypothesis phrasings, required evidence |
+| `manifest.yaml` | The first apply: the Namespace and the workload (broken, or healthy when `fault.yaml` follows) |
+| `fault.yaml` | Optional second apply for faults that are a change (a new revision), run once the first step's Deployments are Available |
+| `expected.yaml` | Known root cause, acceptable hypothesis phrasings, required evidence, and the machine-checked fields below |
 | `README.md` | One paragraph on what is broken and why it is interesting |
+
+## expected.yaml fields read by the harness
+
+Beyond the descriptive fields (`id`, `holdout`, `failure_class`, `root_cause`,
+`must_mention`, `must_not_conclude`, `required_evidence_from`,
+`expected_action`, `max_tool_calls`), the harness reads:
+
+| Field | Meaning |
+|-------|---------|
+| `namespace` | Must start with `scenario-`; the harness only creates and deletes such namespaces |
+| `target` | `kind/name` passed to `diagnose` (deployment, statefulset or daemonset) |
+| `apply` | Files applied in order (default `[manifest.yaml]`) |
+| `timeout_seconds` | How long to wait for the symptom (default 240) |
+| `expected_detectors` | Detectors that must all appear in the findings |
+| `forbidden_detectors` | Detectors that must not appear |
+| `cause_terms` | Case-insensitive substrings that must all appear in the findings' summary and quote |
+| `expect_no_findings` | Negative scenario: passes only with zero findings |
+| `lab_only` | Reported as skipped on kind, never applied |
+
+## Scenarios
+
+| Directory | Fault | Detector | Deterministic baseline |
+|-----------|-------|----------|------------------------|
+| `oomkilled` | Limit lowered in a new revision | `oomkilled` | class and cause right |
+| `badconfig` | Renamed ConfigMap key, cause only in logs | `crashloop` | class right, cause wrong (expected fail) |
+| `imagepull` | Nonexistent image tag | `image_pull` | class and cause right |
+| `probe-port` | Readiness probe on the wrong port | `probe_failure` | class right, cause only coarse |
+| `unschedulable` | Requests larger than any node | `unschedulable` | class and cause right |
+| `diskpressure` | Node DiskPressure eviction (lab only) | `evicted` | skipped on kind |
+| `healthy` | Negative: nothing wrong | none | expected to pass with zero findings |
+
+The deterministic baseline reports class and cause separately: `class_correct`
+says the right detectors fired, `cause_correct` also needs every `cause_terms`
+entry in the findings. A scenario whose cause is only visible somewhere the
+detectors do not read (`badconfig`, in the logs) is expected to fail on cause;
+that gap is what a model has to close.
 
 ## Scoring
 

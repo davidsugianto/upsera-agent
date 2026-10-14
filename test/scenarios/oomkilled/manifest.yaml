@@ -27,4 +27,6 @@ spec:
             requests:
               memory: 256Mi
             limits:
-              memory: 512Mi
+              # Healthy baseline: stress allocates 480M (~458MiB), well under 1Gi.
+              # fault.yaml lowers this below the working set.
+              memory: 1Gi
