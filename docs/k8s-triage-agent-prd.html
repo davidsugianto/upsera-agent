@@ -174,7 +174,7 @@ figcaption b { color: var(--ink); font-weight: 600; }
 .phase .wk { font-family: var(--f-mono); font-size: 12px; color: var(--muted); }
 .phase .ph-body { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 8px 28px; }
 .phase h5 { font-family: var(--f-mono); font-size: 10.5px; font-weight: 500; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); margin: 0 0 6px; }
-.phase ul { font-size: 14px; margin: 0; }
+.phase ul, .phase ol { font-size: 14px; margin: 0; }
 .phase .exit { font-size: 14px; }
 @media (max-width: 760px) { .phase, .phase .ph-body { grid-template-columns: minmax(0, 1fr); } }
 
@@ -213,7 +213,8 @@ footer { margin-top: 48px; padding-top: 16px; border-top: 1px solid var(--line);
       <dl class="meta">
         <div><dt>Project</dt><dd>upsera-agent</dd></div>
         <div><dt>Status</dt><dd><span class="pill draft">Draft</span></dd></div>
-        <div><dt>Version</dt><dd>0.4</dd></div>
+        <div><dt>Version</dt><dd>0.5</dd></div>
+        <div><dt>Progress</dt><dd>Phase 0 merged, Phase 1 next</dd></div>
         <div><dt>Owner</dt><dd>David (@davidsugianto)</dd></div>
         <div><dt>Updated</dt><dd>13 Oct 2026</dd></div>
         <div><dt>Target</dt><dd>GKE, Datadog, Go, GitHub, open source</dd></div>
@@ -975,7 +976,7 @@ dd_monitors  dd_events  change_timeline</code></pre>
 
       <div class="phases">
         <div class="phase">
-          <div><div class="ph-id">Phase 0</div><h3>Foundations</h3><div class="wk">Weeks 1-2</div></div>
+          <div><div class="ph-id">Phase 0</div><h3>Foundations</h3><div class="wk">Weeks 1-2 · merged, live checks pending</div></div>
           <div class="ph-body">
             <div><h5>Deliverables</h5><ul>
               <li>GitHub repository <code>upsera-agent</code>, Go module, Makefile, golangci-lint, GitHub Actions CI with unit tests</li>
@@ -983,11 +984,12 @@ dd_monitors  dd_events  change_timeline</code></pre>
               <li>Helm chart for the management-side deployment; reader ClusterRole for target clusters (no Secrets); OTel wiring through the collector to Datadog; check unified service tagging on target workloads</li>
               <li>ADRs: LLM provider interface, storage, CRD vs DB for actions, <code>DatadogClient</code> (API vs MCP) and read-only key scopes</li>
             </ul></div>
-            <div class="exit"><h5>Exit criteria</h5>CI green; chart lints and starts on kind; agent traces and metrics visible in Datadog; Datadog credentials confirmed read-only; OpenTofu module validates.</div>
+            <div class="exit"><h5>Exit criteria</h5>CI green; chart lints and starts on kind; agent traces and metrics visible in Datadog; Datadog credentials confirmed read-only; OpenTofu module validates.
+              <h5 style="margin-top:12px">Status, 13 Oct 2026</h5>Merged in PR #1. <code>go build</code> and <code>go test ./...</code> pass locally. Still to confirm with real credentials or a cluster, not yet recorded: traces in Datadog (<code>make dev-collector</code>), read-only keys (<code>make check-datadog</code>), chart start on kind (<code>make dev-up</code>), and CI green on <code>main</code>. ADRs 0003, 0004, and 0006 are still <i>proposed</i>; accept them before Phase 1 code depends on them.</div>
           </div>
         </div>
         <div class="phase">
-          <div><div class="ph-id">Phase 1</div><h3>Read-only diagnose CLI</h3><div class="wk">Weeks 3-5 · v0.1</div></div>
+          <div><div class="ph-id">Phase 1</div><h3>Read-only diagnose CLI</h3><div class="wk">Weeks 3-5 · v0.1 · next</div></div>
           <div class="ph-body">
             <div><h5>Deliverables</h5><ul>
               <li><code>kubectl triage</code> plugin for a single workload</li>
@@ -996,7 +998,18 @@ dd_monitors  dd_events  change_timeline</code></pre>
               <li>Redaction and untrusted-data framing for LLM input; local SQLite evidence store with the final Evidence shape; call and token caps</li>
               <li>LLM provider interface with Anthropic and one OpenAI-compatible adapter; models chosen by configuration</li>
               <li>First six eval scenarios (Kubernetes-only, on kind) with a 2-of-3 pass rule</li>
-            </ul></div>
+            </ul>
+            <h5 style="margin-top:12px">Build order</h5><ol>
+              <li>Accept ADRs 0003, 0004, 0006; confirm the Phase 0 live checks.</li>
+              <li><code>internal/repository/kubernetes</code>: client-go reader on the reader identity, plus the read-only tools (get, describe, events, pod logs, rollout history) behind the existing <code>tools.Tool</code> interface.</li>
+              <li><code>pkg/redact</code> and untrusted-data framing, before any tool output reaches a model.</li>
+              <li>Seven KN-5 detectors as pure functions over tool output, each with table tests. Useful without an LLM.</li>
+              <li>SQLite evidence store with the final Evidence shape (tool, arguments, excerpt, timestamp, hash).</li>
+              <li><code>agent-cli diagnose</code> printing detector findings with evidence IDs. This is the first demoable slice and needs no LLM key.</li>
+              <li>LLM provider interface, Anthropic and one OpenAI-compatible adapter; the summary step with call and token caps, rejecting any claim without an evidence ID (INV-2, INV-3).</li>
+              <li>MCP server exposing the same tools.</li>
+              <li>Scenarios 1 to 6 under <code>test/scenarios</code> and the <code>test/harness</code> runner, wired into <code>make eval</code> and CI.</li>
+            </ol></div>
             <div class="exit"><h5>Exit criteria</h5>Scenarios 1 to 6 diagnosed correctly (2 of 3 runs, on the reference model); every claim cites evidence.</div>
           </div>
         </div>
@@ -1079,8 +1092,8 @@ dd_monitors  dd_events  change_timeline</code></pre>
       <h2><span class="num">14</span>Open questions</h2>
       <ul>
         <li>Which provider and models are the reference for evals and defaults, do releases gate only on the reference, and what is the acceptable cost per investigation after the Phase 2 baseline?</li>
-        <li>Build the provider layer in-house (a thin interface and a few adapters) or adopt a Go LLM library? Decide in the Phase 0 ADR.</li>
-        <li>Phase 1 evidence store: this draft assumes local SQLite with the final Evidence shape and Postgres from Phase 2. Confirm.</li>
+        <li>Build the provider layer in-house (a thin interface and a few adapters) or adopt a Go LLM library? Recommended in ADR 0003 (in-house, proposed); accept it before Phase 1.</li>
+        <li>Phase 1 evidence store: this draft assumes local SQLite with the final Evidence shape and Postgres from Phase 2. Recommended in ADR 0004 (proposed); confirm.</li>
         <li>Should non-GKE clusters (EKS, kind-only users) be a v1 target or community-contributed later?</li>
         <li>How should Slack users map to Kubernetes identities: Google Groups, a static map, or OIDC claims?</li>
         <li>Should every write go through Git, including pod deletes, for a single audit trail?</li>
