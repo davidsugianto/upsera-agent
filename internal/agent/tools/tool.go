@@ -6,13 +6,15 @@ package tools
 
 import "context"
 
-// Result is what returns to the model context. Summary is compacted and
-// redacted; the full output is written to storage and referenced by RawRef so
-// that a large cluster cannot exhaust the context window.
+// Result is what a tool returns. Summary is compacted and redacted; it is the
+// only text that may be stored or shown to a model. Data is the typed object
+// the deterministic detectors read; it never leaves the process. Redactions
+// counts what was removed from Summary, by kind.
 type Result struct {
-	Summary   string
-	RawRef    string
-	Truncated bool
+	Summary    string
+	Data       any
+	Truncated  bool
+	Redactions map[string]int
 }
 
 // Tool is the interface every capability implements. Schema is the JSON Schema

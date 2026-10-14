@@ -18,10 +18,28 @@ const (
 	TriggerCron  TriggerType = "cron"
 )
 
+// Evidence is one recorded tool call: what ran, with which arguments, and the
+// redacted excerpt it returned (ADR 0004). SHA256 is the hex digest of Excerpt,
+// so a stored row can be checked later. Raw tool output is never stored.
 type Evidence struct {
-	ToolName string `json:"tool"`
-	Detail   string `json:"detail"`
-	RawRef   string `json:"raw_ref"`
+	ID              string    `json:"id"`
+	InvestigationID string    `json:"investigation_id"`
+	Tool            string    `json:"tool"`
+	Args            string    `json:"args"`
+	Excerpt         string    `json:"excerpt"`
+	TS              time.Time `json:"ts"`
+	SHA256          string    `json:"sha256"`
+}
+
+// Finding is the output of one deterministic detector. Every finding cites the
+// evidence rows it was derived from; a detector that cannot cite evidence does
+// not report.
+type Finding struct {
+	Detector    string   `json:"detector"`
+	Resource    string   `json:"resource"`
+	Summary     string   `json:"summary"`
+	Quote       string   `json:"quote,omitempty"`
+	EvidenceIDs []string `json:"evidence_ids"`
 }
 
 type SuggestedAction struct {
@@ -54,6 +72,7 @@ type Investigation struct {
 	Cluster    string        `json:"cluster"`
 	Trigger    Trigger       `json:"trigger"`
 	Summary    string        `json:"summary"`
+	Findings   []Finding     `json:"findings"`
 	Hypotheses []Hypothesis  `json:"hypotheses"`
 	RuledOut   []RuledOut    `json:"ruled_out"`
 	Unknowns   []string      `json:"unknowns"`

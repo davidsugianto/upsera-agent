@@ -210,6 +210,25 @@ Infrastructure for the GKE lab is OpenTofu in `infra/gke-lab`. CI runs
 `tofu fmt`, `init -backend=false`, and `validate` only. Nothing in this repo
 runs `tofu plan` or `tofu apply` for you.
 
+## Try it
+
+`agent-cli diagnose` inspects one workload with read-only Kubernetes calls and
+reports known failure signatures (no LLM involved). It needs a config file with
+the cluster listed (see above) and a kubeconfig context for it:
+
+```bash
+go run ./cmd/agent-cli diagnose deploy/memory-hog -n demo --cluster kind-upsera-lab
+go run ./cmd/agent-cli diagnose sts/db -n demo --json     # machine-readable
+```
+
+The target is `<kind>/<name>` with `deploy`, `sts`, or `ds`. `--cluster` can be
+omitted when the config has exactly one cluster. Namespaces denied by the
+config are refused before any API call. Redacted evidence excerpts are written
+to `$XDG_STATE_HOME/upsera-agent/evidence.db` (or `~/.local/state/...`); change
+it with `--evidence-db`. Findings cite evidence ids such as `E3`. Exit codes: 0
+finished, 1 runtime error, 2 usage error. `agent-cli diagnose --help` lists all
+flags.
+
 ## Project layout
 
 ```
@@ -290,10 +309,11 @@ Phase 0 is the only phase with working code, and it is still in progress.
   GitHub Actions CI, config loading, health endpoints, OpenTelemetry to Datadog
   through the Collector, reader ClusterRole with no Secrets, Helm chart, kind
   dev environment, OpenTofu for the GKE lab, ADRs
-- [ ] **Phase 1, diagnose CLI:** single-workload CLI, seven failure detectors,
-  Kubernetes tools and MCP server, redaction, SQLite evidence store, LLM
-  interface with Anthropic and one OpenAI-compatible adapter, first six eval
-  scenarios
+- [ ] **Phase 1, diagnose CLI** (in progress; first slice, no LLM):
+  single-workload CLI, eight failure detectors (the seven failure signatures
+  plus stuck rollouts), Kubernetes tools and MCP server, redaction, SQLite
+  evidence store, LLM interface with Anthropic and one OpenAI-compatible
+  adapter, first six eval scenarios
 - [ ] **Phase 2, alert investigator:** Datadog monitor webhook, incident
   grouping, Postgres, `DatadogClient` with metrics, logs, spans, monitors and
   events, planner and executor loop, Slack RCA posts
