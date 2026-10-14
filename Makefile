@@ -48,8 +48,13 @@ fmt: ## Format and tidy
 	go mod tidy
 
 .PHONY: eval
-eval: ## Run the diagnosis benchmark against a local kind cluster
-	go run ./test/harness --scenarios ./test/scenarios --report ./test/results
+eval: kind-guard ## Run the diagnosis scenarios against the kind lab cluster and write test/results/report.json
+	go run ./test/harness --scenarios ./test/scenarios --report ./test/results \
+		--admin-kubeconfig $(DEV_KUBECONFIG) --agent-kubeconfig $(AGENT_KUBECONFIG) --context $(KIND_CONTEXT)
+
+.PHONY: eval-validate
+eval-validate: ## Validate the scenario files (no cluster)
+	go run ./test/harness --validate --scenarios ./test/scenarios
 
 .PHONY: vet
 vet: ## Run go vet

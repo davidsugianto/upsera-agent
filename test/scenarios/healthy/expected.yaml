@@ -1,0 +1,33 @@
+id: healthy
+holdout: false
+failure_class: none
+namespace: scenario-healthy
+target: deployment/web
+apply: [manifest.yaml]
+timeout_seconds: 60
+expected_detectors: []
+forbidden_detectors: []
+cause_terms: []
+# Negative scenario: the right answer is "nothing is wrong".
+expect_no_findings: true
+lab_only: false
+
+root_cause:
+  summary: >
+    Nothing is wrong. The Deployment is healthy and the correct answer is that
+    there is insufficient evidence of a fault.
+
+must_mention: []
+
+must_not_conclude:
+  - any root cause
+  - any failing probe, crash or scheduling problem
+
+required_evidence_from:
+  - k8s_get
+
+expected_action:
+  description: none
+  risk: none
+
+max_tool_calls: 5

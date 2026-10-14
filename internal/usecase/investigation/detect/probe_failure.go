@@ -24,7 +24,7 @@ func probeFailure(s Snapshot) []domain.Finding {
 		var quote string
 
 		if o.EventsEvidence != "" {
-			if msg := probeEvent(o.Events); msg != "" {
+			if msg := probeEvent(o.Events, allReady(o.Pod)); msg != "" {
 				parts = append(parts, "events report a failing probe")
 				quote = msg
 				ids = append(ids, o.EventsEvidence)
@@ -57,18 +57,37 @@ func probeFailure(s Snapshot) []domain.Finding {
 }
 
 // probeEvent returns the message of the first Unhealthy event that reports a
-// failed readiness or liveness probe.
-func probeEvent(evs []corev1.Event) string {
+// failed readiness or liveness probe. Events outlive the problem: every pod
+// logs a readiness failure while it starts, so a readiness event only counts
+// while the pod is still not Ready. A liveness failure restarts the container,
+// which leaves the pod Ready again, so it always counts.
+func probeEvent(evs []corev1.Event, ready bool) string {
 	for _, e := range evs {
 		if e.Reason != "Unhealthy" {
 			continue
 		}
 		m := strings.ToLower(e.Message)
-		if strings.Contains(m, "probe failed") && (strings.Contains(m, "readiness") || strings.Contains(m, "liveness")) {
+		if !strings.Contains(m, "probe failed") {
+			continue
+		}
+		if strings.Contains(m, "liveness") || (strings.Contains(m, "readiness") && !ready) {
 			return e.Message
 		}
 	}
 	return ""
+}
+
+// allReady reports whether every regular container is Ready.
+func allReady(p *corev1.Pod) bool {
+	if p == nil || len(p.Status.ContainerStatuses) == 0 {
+		return false
+	}
+	for _, cs := range p.Status.ContainerStatuses {
+		if !cs.Ready {
+			return false
+		}
+	}
+	return true
 }
 
 // unreadyRunning returns the labels of running, not-Ready containers that have

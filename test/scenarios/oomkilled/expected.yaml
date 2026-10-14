@@ -2,11 +2,20 @@ id: oomkilled
 holdout: false
 failure_class: crashloop
 namespace: scenario-oomkilled
+target: deployment/memory-hog
+# fault.yaml is a revision change, applied once the healthy rollout is Available.
+apply: [manifest.yaml, fault.yaml]
+timeout_seconds: 240
+expected_detectors: [oomkilled]
+forbidden_detectors: []
+cause_terms: ["oomkilled", "memory limit"]
+expect_no_findings: false
+lab_only: false
 
 root_cause:
   summary: >
-    The container is OOM-killed because its memory limit is below its
-    steady-state working set.
+    A new revision lowered the memory limit below the container's
+    steady-state working set, so the container is OOM-killed.
 
 # The harness matches semantically, not by string equality. These are the
 # concepts that must appear in the top-1 hypothesis.
@@ -28,7 +37,7 @@ required_evidence_from:
   - k8s_get
 
 expected_action:
-  description: raise the memory limit above observed working set
+  description: restore the previous memory limit (or raise it above the observed working set)
   risk: low
 
 max_tool_calls: 10

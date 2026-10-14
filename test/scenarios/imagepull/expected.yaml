@@ -1,0 +1,37 @@
+id: imagepull
+holdout: false
+failure_class: container_startup
+namespace: scenario-imagepull
+target: deployment/web
+apply: [manifest.yaml]
+timeout_seconds: 240
+expected_detectors: [image_pull]
+forbidden_detectors: [crashloop, oomkilled]
+cause_terms: ["1.27.999"]
+expect_no_findings: false
+lab_only: false
+
+root_cause:
+  summary: >
+    The image tag nginx:1.27.999 does not exist, so the kubelet cannot pull it
+    and the container never starts.
+
+must_mention:
+  - ImagePullBackOff OR ErrImagePull
+  - nginx:1.27.999
+  - tag does not exist OR not found
+
+must_not_conclude:
+  - application crash
+  - registry credentials
+  - node problem
+
+required_evidence_from:
+  - k8s_describe
+  - k8s_events
+
+expected_action:
+  description: change the image to an existing tag such as nginx:1.27-alpine
+  risk: low
+
+max_tool_calls: 8

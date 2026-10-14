@@ -213,8 +213,8 @@ footer { margin-top: 48px; padding-top: 16px; border-top: 1px solid var(--line);
       <dl class="meta">
         <div><dt>Project</dt><dd>upsera-agent</dd></div>
         <div><dt>Status</dt><dd><span class="pill draft">Draft</span></dd></div>
-        <div><dt>Version</dt><dd>0.5</dd></div>
-        <div><dt>Progress</dt><dd>Phase 0 merged, Phase 1 next</dd></div>
+        <div><dt>Version</dt><dd>0.6</dd></div>
+        <div><dt>Progress</dt><dd>Phase 0 merged, Phase 1 slices 1 and 2 done, LLM summary next</dd></div>
         <div><dt>Owner</dt><dd>David (@davidsugianto)</dd></div>
         <div><dt>Updated</dt><dd>13 Oct 2026</dd></div>
         <div><dt>Target</dt><dd>GKE, Datadog, Go, GitHub, open source</dd></div>
@@ -989,26 +989,26 @@ dd_monitors  dd_events  change_timeline</code></pre>
           </div>
         </div>
         <div class="phase">
-          <div><div class="ph-id">Phase 1</div><h3>Read-only diagnose CLI</h3><div class="wk">Weeks 3-5 · v0.1 · next</div></div>
+          <div><div class="ph-id">Phase 1</div><h3>Read-only diagnose CLI</h3><div class="wk">Weeks 3-5 · v0.1 · in progress</div></div>
           <div class="ph-body">
             <div><h5>Deliverables</h5><ul>
               <li><code>kubectl triage</code> plugin for a single workload</li>
               <li>Detectors for the seven KN-5 signatures</li>
               <li>Kubernetes tool layer (get, describe, events, pod logs, rollout history) and MCP server; LLM summary with evidence IDs. Datadog tools start in Phase 2.</li>
-              <li>Redaction and untrusted-data framing for LLM input; local SQLite evidence store with the final Evidence shape; call and token caps</li>
+              <li>Redaction and untrusted-data framing for LLM input; local SQLite evidence store with the final Evidence shape; call and token caps <i>Done (slice 1).</i></li>
               <li>LLM provider interface with Anthropic and one OpenAI-compatible adapter; models chosen by configuration</li>
               <li>First six eval scenarios (Kubernetes-only, on kind) with a 2-of-3 pass rule</li>
             </ul>
             <h5 style="margin-top:12px">Build order</h5><ol>
-              <li>Accept ADRs 0003, 0004, 0006; confirm the Phase 0 live checks.</li>
-              <li><code>internal/repository/kubernetes</code>: client-go reader on the reader identity, plus the read-only tools (get, describe, events, pod logs, rollout history) behind the existing <code>tools.Tool</code> interface.</li>
-              <li><code>pkg/redact</code> and untrusted-data framing, before any tool output reaches a model.</li>
-              <li>Seven KN-5 detectors as pure functions over tool output, each with table tests. Useful without an LLM.</li>
+              <li>Accept ADRs 0003, 0004, 0006; confirm the Phase 0 live checks. <i>ADR 0004 accepted; the others and the live checks are still open.</i></li>
+              <li><code>internal/repository/kubernetes</code>: client-go reader on the reader identity, plus the read-only tools (get, describe, events, pod logs, rollout history) behind the existing <code>tools.Tool</code> interface. <i>Done (slice 1).</i></li>
+              <li><code>pkg/redact</code> and untrusted-data framing, before any tool output reaches a model. <i>Done (slice 1).</i></li>
+              <li>Seven KN-5 detectors as pure functions over tool output, each with table tests. Useful without an LLM. <i>Done (slice 1).</i></li>
               <li>SQLite evidence store with the final Evidence shape (tool, arguments, excerpt, timestamp, hash).</li>
-              <li><code>agent-cli diagnose</code> printing detector findings with evidence IDs. This is the first demoable slice and needs no LLM key.</li>
-              <li>LLM provider interface, Anthropic and one OpenAI-compatible adapter; the summary step with call and token caps, rejecting any claim without an evidence ID (INV-2, INV-3).</li>
-              <li>MCP server exposing the same tools.</li>
-              <li>Scenarios 1 to 6 under <code>test/scenarios</code> and the <code>test/harness</code> runner, wired into <code>make eval</code> and CI.</li>
+              <li><code>agent-cli diagnose</code> printing detector findings with evidence IDs. This is the first demoable slice and needs no LLM key. <i>Done (slice 1).</i></li>
+              <li>LLM provider interface, Anthropic and one OpenAI-compatible adapter (slice 3); the summary step with call and token caps, rejecting any claim without an evidence ID (INV-2, INV-3).</li>
+              <li>MCP server exposing the same tools (slice 4).</li>
+              <li>Scenarios 1 to 6 under <code>test/scenarios</code> and the <code>test/harness</code> runner, wired into <code>make eval</code> and CI. <i>Slice 2: scored first against the deterministic <code>diagnose</code> output to give a baseline before any model is added. Detector class and root cause are reported separately. <b>Baseline on kind (14 Oct 2026):</b> class accuracy 1.00, top-1 0.83 (5 of 6 scored scenarios), evidence integrity 1.00; <code>badconfig</code> misses the cause because it is only visible in logs, and scenario 6 is skipped (lab only).</i></li>
             </ol></div>
             <div class="exit"><h5>Exit criteria</h5>Scenarios 1 to 6 diagnosed correctly (2 of 3 runs, on the reference model); every claim cites evidence.</div>
           </div>

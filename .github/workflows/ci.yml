@@ -102,9 +102,9 @@ jobs:
     timeout-minutes: 30
     # The regression gate. A drop in top-1 accuracy blocks the merge, because
     # prompt and tool changes are code changes and deserve the same treatment.
-    # Off until the harness exists: it needs test/harness and the
-    # ANTHROPIC_API_KEY secret. Enable by setting the repository variable
-    # RUN_EVAL=true once both are in place.
+    # Off by default. Enable by setting the repository variable RUN_EVAL=true.
+    # The deterministic run needs no API key. When a model is added to the
+    # harness, give only that step its key, never the whole job.
     if: github.event_name == 'pull_request' && vars.RUN_EVAL == 'true'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -113,12 +113,16 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+      # The cluster name and context must match the Makefile (kind-upsera-lab).
       - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
         with:
-          cluster_name: triage-eval
+          cluster_name: upsera-lab
+      # Reuses the cluster above, applies the reader RBAC, and writes the admin
+      # and read-only agent kubeconfigs that make eval expects under bin/.
+      - name: prepare lab kubeconfigs
+        run: make dev-up
+      # Failing scenarios are results, not errors: the gate is the next step.
       - name: run scenario suite
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: make eval
       - name: enforce accuracy gate
         run: go run ./test/harness --check --min-top1 0.80 --report ./test/results
