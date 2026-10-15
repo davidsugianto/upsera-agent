@@ -43,6 +43,7 @@ type ServerConfig struct {
 // AgentConfig holds the hard budgets for one investigation.
 type AgentConfig struct {
 	MaxToolCalls int           `yaml:"max_tool_calls"`
+	MaxLLMTokens int           `yaml:"max_llm_tokens"` // input plus output, summed over model calls
 	MaxCostUSD   float64       `yaml:"max_cost_usd"`
 	MaxDuration  time.Duration `yaml:"max_duration"`
 }
@@ -80,7 +81,7 @@ type NamespaceFilters struct {
 func defaults() Config {
 	return Config{
 		Server: ServerConfig{Addr: ":8080", ReadTimeout: 15 * time.Second},
-		Agent:  AgentConfig{MaxToolCalls: 15, MaxCostUSD: 0.25, MaxDuration: 120 * time.Second},
+		Agent:  AgentConfig{MaxToolCalls: 25, MaxLLMTokens: 30000, MaxCostUSD: 0.25, MaxDuration: 120 * time.Second},
 		Datadog: DatadogConfig{ //nolint:gosec // env var names, not credentials
 			APIKeyEnv: "DD_API_KEY",
 			AppKeyEnv: "DD_APP_KEY",
@@ -123,6 +124,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Agent.MaxToolCalls <= 0 {
 		add("agent.max_tool_calls must be greater than 0")
+	}
+	if c.Agent.MaxLLMTokens <= 0 {
+		add("agent.max_llm_tokens must be greater than 0")
 	}
 	// NaN is not <= 0, so the comparison is written to fail for it too.
 	if !(c.Agent.MaxCostUSD > 0) || math.IsInf(c.Agent.MaxCostUSD, 0) {

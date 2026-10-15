@@ -52,6 +52,12 @@ eval: kind-guard ## Run the diagnosis scenarios against the kind lab cluster and
 	go run ./test/harness --scenarios ./test/scenarios --report ./test/results \
 		--admin-kubeconfig $(DEV_KUBECONFIG) --agent-kubeconfig $(AGENT_KUBECONFIG) --context $(KIND_CONTEXT)
 
+.PHONY: eval-llm
+eval-llm: kind-guard ## Score the LLM summary step vs the baseline (SPENDS REAL MONEY; needs the llm.api_key_env var, e.g. ANTHROPIC_API_KEY; writes test/results/llm/report.json)
+	go run ./test/harness --llm --runs 3 --config deploy/dev/config.dev.yaml --baseline ./test/results/report.json \
+		--scenarios ./test/scenarios --report ./test/results/llm \
+		--admin-kubeconfig $(DEV_KUBECONFIG) --agent-kubeconfig $(AGENT_KUBECONFIG) --context $(KIND_CONTEXT)
+
 .PHONY: eval-validate
 eval-validate: ## Validate the scenario files (no cluster)
 	go run ./test/harness --validate --scenarios ./test/scenarios

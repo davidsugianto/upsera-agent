@@ -229,6 +229,31 @@ it with `--evidence-db`. Findings cite evidence ids such as `E3`. Exit codes: 0
 finished, 1 runtime error, 2 usage error. `agent-cli diagnose --help` lists all
 flags.
 
+Add `--summarize` to get ranked hypotheses on top of the findings. After the
+read-only checks, one model call turns the stored evidence into at most three
+hypotheses, each with a confidence, the evidence ids it rests on (`E3, E5`), and
+what would disprove it, plus what the evidence rules out. Claims that do not cite
+stored evidence are dropped and counted as `rejected claims`. It is off by
+default, so nothing needs an API key unless you ask for it. The key is read from
+the environment variable named by `llm.api_key_env` in the config
+(`ANTHROPIC_API_KEY` in the example). For the `anthropic` provider, an empty key
+falls back to `ANTHROPIC_AUTH_TOKEN` or a profile from `ant auth login`. Either
+way the calls bill the API organization (neither route is free), and with no
+credential the command stops with exit 1 before the cluster is touched. The call uses `llm.planner_model` and is
+capped at `agent.max_llm_tokens` tokens; `agent.max_tool_calls` (default 25) caps
+the cluster reads, inspecting the least healthy pods first.
+
+```bash
+export ANTHROPIC_API_KEY=...
+go run ./cmd/agent-cli diagnose deploy/memory-hog -n demo --summarize
+```
+
+A `degraded: <reason>` line means the model output could not be used (a refusal,
+an exhausted budget, a provider error, or output that failed validation). The
+deterministic findings above it are still complete and the exit code stays 0.
+With `--json`, `hypotheses`, `ruled_out`, `llm` (model, tokens), `rejected_claims`
+and `degraded` are included.
+
 ## Project layout
 
 ```

@@ -1,5 +1,6 @@
 // Command agent-cli is the command-line surface for k8s-triage-agent. It
-// reports its version and runs read-only workload diagnoses without an LLM.
+// reports its version and runs read-only workload diagnoses, optionally adding
+// a model-written summary with --summarize.
 package main
 
 import (

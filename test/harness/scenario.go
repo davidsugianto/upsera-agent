@@ -12,6 +12,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	k8stools "github.com/davidsugianto/upsera-agent/internal/agent/tools/k8s"
 	kube "github.com/davidsugianto/upsera-agent/internal/repository/kubernetes"
 )
 
@@ -47,6 +48,9 @@ type Scenario struct {
 	CauseTerms         []string `yaml:"cause_terms"`
 	ExpectNoFindings   bool     `yaml:"expect_no_findings"`
 	LabOnly            bool     `yaml:"lab_only"`
+	// RequiredEvidenceFrom lists tools; in LLM mode the rank-1 hypothesis must
+	// cite evidence from at least one of them. Empty means no requirement.
+	RequiredEvidenceFrom []string `yaml:"required_evidence_from"`
 
 	// Dir is the scenario directory; Kind and Name are Target, normalised.
 	Dir  string `yaml:"-"`
@@ -157,6 +161,11 @@ func (sc *Scenario) validate() []error {
 			bad("forbidden_detectors: unknown detector %q", d)
 		}
 	}
+	for _, name := range sc.RequiredEvidenceFrom {
+		if !isKnownTool(name) {
+			bad("required_evidence_from: unknown tool %q (want one of %s)", name, strings.Join(knownTools, ", "))
+		}
+	}
 	switch {
 	case sc.ExpectNoFindings && len(sc.ExpectedDetectors) > 0:
 		bad("expect_no_findings cannot be combined with expected_detectors")
@@ -165,6 +174,21 @@ func (sc *Scenario) validate() []error {
 		bad("expected_detectors is required unless expect_no_findings is true")
 	}
 	return errs
+}
+
+// knownTools are the read-only tool names evidence rows are tagged with.
+var knownTools = []string{
+	k8stools.NameGet, k8stools.NameListPods, k8stools.NameDescribe,
+	k8stools.NameEvents, k8stools.NamePodLogs, k8stools.NameRolloutHistory,
+}
+
+func isKnownTool(name string) bool {
+	for _, t := range knownTools {
+		if t == name {
+			return true
+		}
+	}
+	return false
 }
 
 func isKnownDetector(name string) bool {

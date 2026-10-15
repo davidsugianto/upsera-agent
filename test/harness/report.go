@@ -28,6 +28,8 @@ type Summary struct {
 	EvidenceIntegrityRate float64   `json:"evidence_integrity_rate"`
 	GeneratedAt           time.Time `json:"generated_at"`
 	Mode                  string    `json:"mode"`
+	// LLMSummary is set only in LLM mode.
+	*LLMSummary
 }
 
 // Report is the content of report.json.
@@ -88,11 +90,15 @@ func WriteReport(dir string, rep Report) (string, error) {
 
 // ReadReport loads dir/report.json.
 func ReadReport(dir string) (Report, error) {
-	var rep Report
 	b, err := os.ReadFile(filepath.Join(dir, reportFile)) //nolint:gosec // dir comes from the --report flag
 	if err != nil {
-		return rep, fmt.Errorf("read report: %w", err)
+		return Report{}, fmt.Errorf("read report: %w", err)
 	}
+	return parseReport(b)
+}
+
+func parseReport(b []byte) (Report, error) {
+	var rep Report
 	if err := json.Unmarshal(b, &rep); err != nil {
 		return rep, fmt.Errorf("parse report: %w", err)
 	}

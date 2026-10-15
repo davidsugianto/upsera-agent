@@ -42,8 +42,11 @@ func TestLoadAppliesDefaults(t *testing.T) {
 	if cfg.Server.ReadTimeout != 15*time.Second {
 		t.Errorf("read_timeout = %v", cfg.Server.ReadTimeout)
 	}
-	if cfg.Agent.MaxToolCalls != 15 {
+	if cfg.Agent.MaxToolCalls != 25 {
 		t.Errorf("max_tool_calls = %d", cfg.Agent.MaxToolCalls)
+	}
+	if cfg.Agent.MaxLLMTokens != 30000 {
+		t.Errorf("max_llm_tokens = %d", cfg.Agent.MaxLLMTokens)
 	}
 	if cfg.Agent.MaxCostUSD != 0.25 {
 		t.Errorf("max_cost_usd = %v", cfg.Agent.MaxCostUSD)
@@ -63,6 +66,7 @@ server:
   read_timeout: 3s
 agent:
   max_tool_calls: 5
+  max_llm_tokens: 1234
   max_cost_usd: 1.5
   max_duration: 10s
 `
@@ -73,7 +77,7 @@ agent:
 	if cfg.Server.Addr != ":9090" || cfg.Server.ReadTimeout != 3*time.Second {
 		t.Errorf("server = %+v", cfg.Server)
 	}
-	if cfg.Agent.MaxToolCalls != 5 || cfg.Agent.MaxCostUSD != 1.5 || cfg.Agent.MaxDuration != 10*time.Second {
+	if cfg.Agent.MaxToolCalls != 5 || cfg.Agent.MaxLLMTokens != 1234 || cfg.Agent.MaxCostUSD != 1.5 || cfg.Agent.MaxDuration != 10*time.Second {
 		t.Errorf("agent = %+v", cfg.Agent)
 	}
 }
@@ -146,6 +150,8 @@ func TestValidate(t *testing.T) {
 		{"negative read_timeout", func(c *Config) { c.Server.ReadTimeout = -time.Second }, []string{"server.read_timeout"}},
 		{"zero max_tool_calls", func(c *Config) { c.Agent.MaxToolCalls = 0 }, []string{"agent.max_tool_calls"}},
 		{"negative max_tool_calls", func(c *Config) { c.Agent.MaxToolCalls = -1 }, []string{"agent.max_tool_calls"}},
+		{"zero max_llm_tokens", func(c *Config) { c.Agent.MaxLLMTokens = 0 }, []string{"agent.max_llm_tokens"}},
+		{"negative max_llm_tokens", func(c *Config) { c.Agent.MaxLLMTokens = -1 }, []string{"agent.max_llm_tokens"}},
 		{"zero max_cost_usd", func(c *Config) { c.Agent.MaxCostUSD = 0 }, []string{"agent.max_cost_usd"}},
 		{"negative max_cost_usd", func(c *Config) { c.Agent.MaxCostUSD = -0.5 }, []string{"agent.max_cost_usd"}},
 		{"NaN max_cost_usd", func(c *Config) { c.Agent.MaxCostUSD = math.NaN() }, []string{"agent.max_cost_usd"}},
@@ -250,6 +256,7 @@ server:
   read_timeout: 0s
 agent:
   max_tool_calls: 0
+  max_llm_tokens: 0
   max_cost_usd: 0
   max_duration: 0s
 `
@@ -257,7 +264,7 @@ agent:
 	if err == nil {
 		t.Fatal("expected error for explicit zero values")
 	}
-	for _, w := range []string{"server.read_timeout", "agent.max_tool_calls", "agent.max_cost_usd", "agent.max_duration"} {
+	for _, w := range []string{"server.read_timeout", "agent.max_tool_calls", "agent.max_llm_tokens", "agent.max_cost_usd", "agent.max_duration"} {
 		if !strings.Contains(err.Error(), w) {
 			t.Errorf("error %q missing %q", err, w)
 		}

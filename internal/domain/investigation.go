@@ -48,17 +48,30 @@ type SuggestedAction struct {
 	RequiresApproval bool   `json:"requires_approval"`
 }
 
+// Hypothesis is one ranked explanation. It cites stored evidence by ID: a
+// hypothesis with no valid citation is not allowed to exist (INV-3).
 type Hypothesis struct {
-	Rank       int              `json:"rank"`
-	Statement  string           `json:"statement"`
-	Confidence Confidence       `json:"confidence"`
-	Evidence   []Evidence       `json:"evidence"`
-	Action     *SuggestedAction `json:"suggested_action,omitempty"`
+	Rank        int              `json:"rank"`
+	Statement   string           `json:"statement"`
+	Confidence  Confidence       `json:"confidence"`
+	EvidenceIDs []string         `json:"evidence_ids"`
+	Disproof    string           `json:"disproof,omitempty"` // what observation would disprove it (INV-4)
+	Action      *SuggestedAction `json:"suggested_action,omitempty"`
 }
 
+// RuledOut is a cause the evidence argues against, with the evidence cited.
 type RuledOut struct {
-	Statement string `json:"statement"`
-	Reason    string `json:"reason"`
+	Statement   string   `json:"statement"`
+	Reason      string   `json:"reason"`
+	EvidenceIDs []string `json:"evidence_ids"`
+}
+
+// LLMUsage records what the summary step spent.
+type LLMUsage struct {
+	Model        string `json:"model"`
+	Calls        int    `json:"calls"`
+	InputTokens  int    `json:"input_tokens"`
+	OutputTokens int    `json:"output_tokens"`
 }
 
 type Trigger struct {
@@ -80,6 +93,7 @@ type Investigation struct {
 	StartedAt  time.Time     `json:"started_at"`
 	Duration   time.Duration `json:"duration"`
 	CostUSD    float64       `json:"cost_usd"`
+	LLM        *LLMUsage     `json:"llm,omitempty"`
 	Feedback   *Feedback     `json:"feedback,omitempty"`
 }
 

@@ -10,7 +10,9 @@ server:
 agent:
   # Hard stops, not warnings. An investigation that blows either budget is
   # returned as-is with whatever it found and an explicit unknowns list.
-  max_tool_calls: 15
+  max_tool_calls: 25
+  # Input plus output tokens across all model calls (agent-cli diagnose --summarize).
+  max_llm_tokens: 30000
   max_cost_usd: 0.25
   max_duration: 120s
 
@@ -23,6 +25,8 @@ llm:
   # trusting it.
   planner_model: claude-sonnet-5-5
   executor_model: claude-haiku-5-5
+  # For anthropic, an empty variable falls back to ANTHROPIC_AUTH_TOKEN or a
+  # profile from `ant auth login` (bills the same API organization).
   api_key_env: ANTHROPIC_API_KEY
   # Only for provider: openai-compatible (for example a local Ollama or vLLM).
   base_url: ""

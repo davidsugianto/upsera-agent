@@ -4,7 +4,8 @@ server:
   addr: ":8080"
   read_timeout: 15s
 agent:
-  max_tool_calls: 15
+  max_tool_calls: 25
+  max_llm_tokens: 30000
   max_cost_usd: 0.25
   max_duration: 120s
 llm:
