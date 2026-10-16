@@ -1,6 +1,6 @@
 # ADR 0003: The LLM provider is configuration, behind a thin in-house interface
 
-**Status:** proposed
+**Status:** accepted
 **Date:** 2026-10-11
 
 ## Context
@@ -19,12 +19,12 @@ not be forced onto the same provider or model.
 
 The open choice is how to build the provider layer: write a thin interface and
 a few adapters ourselves, or adopt a Go LLM library that already wraps several
-providers. The decision has not been made. This ADR recommends the first option
+providers. This ADR chooses the first option
 and records what it costs.
 
 ## Decision
 
-Proposed: build the provider layer in-house, in `internal/agent/llm`.
+Build the provider layer in-house, in `internal/agent/llm`.
 
 - A small Go interface covers what the agent loop needs: send messages with a
   set of tool definitions, receive text or tool calls, optionally constrain the
@@ -40,6 +40,9 @@ Proposed: build the provider layer in-house, in `internal/agent/llm`.
 - "Supported" is decided by evidence, not by having an adapter. A provider and
   model pair is labelled supported only if it passes the eval suite, and the
   suite reports accuracy and cost per pair.
+
+The reference for evals and defaults is `claude-sonnet-5-5` on the `anthropic`
+provider.
 
 Nothing in the agent outside `internal/agent/llm` imports a vendor SDK or refers to a
 vendor by name.
@@ -75,9 +78,11 @@ Negative:
 
 Open questions:
 
-- The reference provider and model for evals and defaults is not chosen. It
-  decides which pair releases gate on, and what "acceptable cost per
-  investigation" means after the Phase 2 baseline.
-- Whether to adopt a Go LLM library instead is still open. If the user chooses
-  one, this ADR is superseded, and the interface above becomes the seam where
-  the library sits behind our own types.
+- The cost-per-investigation target stays open until the Phase 2 baseline.
+  Whether releases gate only on the reference pair (`claude-sonnet-5-5` on
+  `anthropic`) is also open.
+- Whether to adopt a Go LLM library instead was left open. The in-house layer
+  shipped in Phase 1: `internal/agent/llm` has an Anthropic adapter and an
+  OpenAI-compatible adapter. If a library is adopted later, this ADR is
+  superseded, and the interface above becomes the seam where the library sits
+  behind our own types.

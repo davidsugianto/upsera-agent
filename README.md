@@ -8,13 +8,17 @@ exact evidence behind each one.
 Read-only by default. It cannot change your cluster, and it never writes to
 Datadog.
 
-> **Status: early development, Phase 0 (foundations) only.** The product design
-> is in the [PRD](docs/k8s-triage-agent-prd.html). What exists today is the
-> scaffolding, config loading, telemetry, health endpoints, reader RBAC, a Helm
-> chart, a dev environment, CI, and the ADRs. There are no detectors, tools,
-> LLM calls, Datadog client, or database yet. Sections below that describe
-> investigations describe the target, not current behaviour. See
-> [Roadmap](#roadmap).
+> **Status: early development, Phase 1 (diagnose CLI) nearly complete.** The
+> product design is in the [PRD](docs/k8s-triage-agent-prd.html). What exists
+> today: the Phase 0 foundations (config loading, telemetry, health endpoints,
+> reader RBAC, Helm chart, dev environment, CI, ADRs), plus `agent-cli diagnose`
+> (read-only, eight detectors, SQLite evidence store, optional `--summarize` LLM
+> summary that rejects uncited claims) and the scenario eval harness
+> (`make eval`, `make eval-llm`). `agent-cli mcp` serves the six read-only
+> Kubernetes tools to an MCP client over stdio. The LLM eval run is still
+> pending. There is no Datadog client, alert receiver, Postgres, or Slack yet
+> (Phase 2). The example output under "What it will do" is the target, not
+> current behaviour. See [Roadmap](#roadmap).
 
 ---
 
@@ -131,8 +135,8 @@ with its subject is offline during exactly the incidents it exists for. See
 set in config, behind a thin Go interface: Anthropic, OpenAI, Gemini, or any
 OpenAI-compatible endpoint such as Ollama or vLLM. A provider needs tool calling
 and structured output, and counts as supported only if it passes the eval
-suite. See [ADR 0003](docs/adr/0003-llm-provider-interface.md), which is still
-proposed.
+suite. Today the Anthropic and OpenAI-compatible adapters exist. See
+[ADR 0003](docs/adr/0003-llm-provider-interface.md).
 
 **Deterministic checks stay in Go.** Known signatures such as OOMKilled or
 ImagePullBackOff are detected by code. The model correlates and explains, it
@@ -147,7 +151,8 @@ resolves anything. See [ADR 0006](docs/adr/0006-datadog-client-api-vs-mcp.md).
 
 Storage and the home of remediation records are tracked in
 [ADR 0004](docs/adr/0004-storage.md) and
-[ADR 0005](docs/adr/0005-remediation-requests-crd-vs-db.md). Both are proposed.
+[ADR 0005](docs/adr/0005-remediation-requests-crd-vs-db.md). ADR 0004 is
+accepted. ADR 0005 is proposed and deferred to Phase 4.
 
 ## Safety model
 
@@ -162,9 +167,13 @@ Storage and the home of remediation records are tracked in
 | Budgets | Hard per-investigation ceilings on tool calls, wall clock, and cost. Stops, not warnings |
 | Audit | Every tool call and model call recorded with inputs, outputs, and requesting identity |
 
-Of these, the reader RBAC is what exists today (see
-[deploy/helm/k8s-triage-agent](deploy/helm/k8s-triage-agent)). Redaction,
-budgets, and audit are designed but not built.
+Of these, what exists today is the reader RBAC (see
+[deploy/helm/k8s-triage-agent](deploy/helm/k8s-triage-agent)), a redaction
+scrubber (`pkg/redact`) applied to stored evidence excerpts and provider error
+messages, and caps on tool calls (`agent.max_tool_calls`) and on LLM calls and
+tokens (`internal/agent/llm/budget.go`). Wall-clock and cost ceilings are not
+built. Audit is partial: each tool call is stored as an evidence row with its
+redacted excerpt, but model calls are not recorded.
 
 Remediation is Phase 4, uses a separate ServiceAccount, and requires explicit
 human approval plus a dry-run diff for every action.
@@ -194,8 +203,8 @@ make verify-telemetry             # no Datadog needed: agent telemetry reaches a
 make dev-down                     # delete the kind cluster
 ```
 
-`make help` lists every target. Nothing calls an LLM in Phase 0, so the LLM key
-is only needed once a later phase adds it.
+`make help` lists every target. The LLM key is only needed for
+`agent-cli diagnose --summarize` and `make eval-llm`.
 
 Configuration is a YAML file (copy `configs/config.example.yaml` to
 `configs/config.yaml`). Secrets are referenced by environment variable name in
@@ -213,8 +222,9 @@ runs `tofu plan` or `tofu apply` for you.
 ## Try it
 
 `agent-cli diagnose` inspects one workload with read-only Kubernetes calls and
-reports known failure signatures (no LLM involved). It needs a config file with
-the cluster listed (see above) and a kubeconfig context for it:
+reports known failure signatures (no LLM involved unless you add
+`--summarize`). It needs a config file with the cluster listed (see above) and
+a kubeconfig context for it:
 
 ```bash
 go run ./cmd/agent-cli diagnose deploy/memory-hog -n demo --cluster kind-upsera-lab
@@ -254,6 +264,39 @@ deterministic findings above it are still complete and the exit code stays 0.
 With `--json`, `hypotheses`, `ruled_out`, `llm` (model, tokens), `rejected_claims`
 and `degraded` are included.
 
+### MCP server
+
+`agent-cli mcp` serves the six read-only Kubernetes tools to an MCP client over
+stdio:
+
+```bash
+go build -o bin/agent-cli ./cmd/agent-cli
+bin/agent-cli mcp --config /abs/path/to/config.yaml [--cluster NAME] [--kubeconfig PATH]
+
+# register it with Claude Code (use the absolute binary path, or put agent-cli on PATH)
+claude mcp add upsera-triage -- /abs/path/to/bin/agent-cli mcp --config /abs/path/to/config.yaml
+```
+
+`--config` is required and must be an absolute path. MCP clients start the
+server in the open project's directory, so a relative or default path would let
+an opened repo choose the cluster. At startup the server logs the config path,
+cluster and kubeconfig context to stderr.
+
+Tool output is redacted and size-capped but not wrapped in untrusted-data
+framing, so the client must treat it as untrusted data. Stdout is the protocol
+channel; logs go to stderr.
+
+## Evals
+
+```bash
+make dev-up        # kind cluster the scenarios run on
+make eval          # deterministic scenarios, writes test/results/report.json
+make eval-llm      # scores the --summarize step vs the baseline; SPENDS REAL API MONEY
+```
+
+`make eval-llm` needs the key named by `llm.api_key_env` and a baseline from
+`make eval`. See [test/scenarios/README.md](test/scenarios/README.md).
+
 ## Project layout
 
 ```
@@ -290,8 +333,9 @@ and `degraded` are included.
     └── archive/                    # superseded documents
 ```
 
-Most packages above are placeholders in Phase 0. The directories exist so the
-layout is settled, not because the code does.
+Some packages above are still placeholders (for example `remediation`, `loop`,
+`datadog`, `postgres`). The directories exist so the layout is
+settled, not because the code does.
 
 ## How correctness will be measured
 
@@ -328,13 +372,13 @@ measured yet.
 
 ## Roadmap
 
-Phase 0 is the only phase with working code, and it is still in progress.
+Phases 0 and 1 have working code. Phase 1 is nearly complete.
 
-- [ ] **Phase 0, foundations:** repo, Go module, Makefile, golangci-lint,
+- [ ] **Phase 0, foundations** *(merged; live checks unconfirmed)*: repo, Go module, Makefile, golangci-lint,
   GitHub Actions CI, config loading, health endpoints, OpenTelemetry to Datadog
   through the Collector, reader ClusterRole with no Secrets, Helm chart, kind
   dev environment, OpenTofu for the GKE lab, ADRs
-- [ ] **Phase 1, diagnose CLI** (in progress; first slice, no LLM):
+- [ ] **Phase 1, diagnose CLI** (nearly complete; the LLM eval run is pending):
   single-workload CLI, eight failure detectors (the seven failure signatures
   plus stuck rollouts), Kubernetes tools and MCP server, redaction, SQLite
   evidence store, LLM interface with Anthropic and one OpenAI-compatible
