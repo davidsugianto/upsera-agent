@@ -22,8 +22,6 @@ early stored evidence unreadable.
 
 ## Decision
 
-Proposed:
-
 - **Phase 1:** a local SQLite file holds evidence. The table uses the final
   Evidence shape (id, incident_id, tool, args, excerpt, ts, sha256) from the
   start, so nothing changes in the record when the backend does.

@@ -58,3 +58,11 @@ func TestVersionRejectsExtraArgs(t *testing.T) {
 		t.Fatalf("code=%d", code)
 	}
 }
+
+func TestUsageListsMCP(t *testing.T) {
+	var out, errOut bytes.Buffer
+	run(nil, &out, &errOut)
+	if !strings.Contains(errOut.String(), "mcp") || !strings.Contains(errOut.String(), "serve the read-only tools to an MCP client over stdio") {
+		t.Errorf("stderr=%q", errOut.String())
+	}
+}

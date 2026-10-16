@@ -19,7 +19,7 @@ telemetry flowing through an OpenTelemetry Collector to Datadog. The kind cluste
 | `DD_API_KEY` | `dev-collector`, `check-datadog` | passed to the container by name only |
 | `DD_SITE` | `dev-collector`, `check-datadog` | e.g. `datadoghq.com` |
 | `DD_APP_KEY` | `check-datadog` | use a key scoped to read-only |
-| `ANTHROPIC_API_KEY` | later phases | named in `config.dev.yaml`; no LLM calls in Phase 0 |
+| `ANTHROPIC_API_KEY` | `diagnose --summarize`, `make eval-llm` | named in `config.dev.yaml`; only needed for `agent-cli diagnose --summarize` and `make eval-llm` |
 
 ## Loop
 

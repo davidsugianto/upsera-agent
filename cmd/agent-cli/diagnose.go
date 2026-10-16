@@ -42,15 +42,24 @@ var newLLMClient = func(cfg config.LLMConfig) (llm.Client, error) {
 // summarize is the summary step; a seam so command tests need no model output.
 var summarize = investigation.Summarize
 
-// newDiagnoser builds the real cluster-backed diagnoser. It opens the evidence
-// database, so callers must have checked the namespace first. Tests replace it.
-var newDiagnoser = func(cl config.ClusterConfig, kubeconfig, evidenceDB string) (diagnoser, error) {
+// newRegistry builds the read-only tool registry for one cluster. diagnose and
+// mcp share it so both expose exactly the same tools. Tests replace it.
+var newRegistry = func(cl config.ClusterConfig, kubeconfig string) (*tools.Registry, error) {
 	cs, err := kube.NewClientset(kubeconfig, cl.KubeconfigContext)
 	if err != nil {
 		return nil, err
 	}
 	reader := kube.NewReader(cs, cl.Namespaces)
-	reg := tools.NewRegistry(false, k8stools.NewTools(reader)...)
+	return tools.NewRegistry(false, k8stools.NewTools(reader)...), nil
+}
+
+// newDiagnoser builds the real cluster-backed diagnoser. It opens the evidence
+// database, so callers must have checked the namespace first. Tests replace it.
+var newDiagnoser = func(cl config.ClusterConfig, kubeconfig, evidenceDB string) (diagnoser, error) {
+	reg, err := newRegistry(cl, kubeconfig)
+	if err != nil {
+		return nil, err
+	}
 
 	if err := os.MkdirAll(filepath.Dir(evidenceDB), 0o700); err != nil {
 		return nil, fmt.Errorf("create evidence db directory: %w", err)

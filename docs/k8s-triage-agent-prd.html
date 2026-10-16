@@ -214,9 +214,9 @@ footer { margin-top: 48px; padding-top: 16px; border-top: 1px solid var(--line);
         <div><dt>Project</dt><dd>upsera-agent</dd></div>
         <div><dt>Status</dt><dd><span class="pill draft">Draft</span></dd></div>
         <div><dt>Version</dt><dd>0.6</dd></div>
-        <div><dt>Progress</dt><dd>Phase 0 merged, Phase 1 slices 1 and 2 done, LLM summary next</dd></div>
+        <div><dt>Progress</dt><dd>Phase 0 merged; Phase 1 slices 1 to 3 merged (PRs #3, #4, #5); MCP server implemented on a branch, LLM eval run pending</dd></div>
         <div><dt>Owner</dt><dd>David (@davidsugianto)</dd></div>
-        <div><dt>Updated</dt><dd>13 Oct 2026</dd></div>
+        <div><dt>Updated</dt><dd>16 Oct 2026</dd></div>
         <div><dt>Target</dt><dd>GKE, Datadog, Go, GitHub, open source</dd></div>
       </dl>
     </header>
@@ -985,7 +985,7 @@ dd_monitors  dd_events  change_timeline</code></pre>
               <li>ADRs: LLM provider interface, storage, CRD vs DB for actions, <code>DatadogClient</code> (API vs MCP) and read-only key scopes</li>
             </ul></div>
             <div class="exit"><h5>Exit criteria</h5>CI green; chart lints and starts on kind; agent traces and metrics visible in Datadog; Datadog credentials confirmed read-only; OpenTofu module validates.
-              <h5 style="margin-top:12px">Status, 13 Oct 2026</h5>Merged in PR #1. <code>go build</code> and <code>go test ./...</code> pass locally. Still to confirm with real credentials or a cluster, not yet recorded: traces in Datadog (<code>make dev-collector</code>), read-only keys (<code>make check-datadog</code>), chart start on kind (<code>make dev-up</code>), and CI green on <code>main</code>. ADRs 0003, 0004, and 0006 are still <i>proposed</i>; accept them before Phase 1 code depends on them.</div>
+              <h5 style="margin-top:12px">Status, 13 Oct 2026 (updated 16 Oct)</h5>Merged in PR #1. <code>go build</code> and <code>go test ./...</code> pass locally. Still to confirm with real credentials or a cluster, not yet recorded: traces in Datadog (<code>make dev-collector</code>), read-only keys (<code>make check-datadog</code>), chart start on kind (<code>make dev-up</code>), and CI green on <code>main</code>. ADRs 0003 and 0006 are now accepted (ADR 0004 was accepted earlier); the live checks above remain unconfirmed.</div>
           </div>
         </div>
         <div class="phase">
@@ -1000,17 +1000,17 @@ dd_monitors  dd_events  change_timeline</code></pre>
               <li>First six eval scenarios (Kubernetes-only, on kind) with a 2-of-3 pass rule</li>
             </ul>
             <h5 style="margin-top:12px">Build order</h5><ol>
-              <li>Accept ADRs 0003, 0004, 0006; confirm the Phase 0 live checks. <i>ADR 0004 accepted; the others and the live checks are still open.</i></li>
+              <li>Accept ADRs 0003, 0004, 0006; confirm the Phase 0 live checks. <i>ADR 0004 was already accepted; ADRs 0003 (with <code>claude-sonnet-5-5</code> as the reference model for evals and defaults) and 0006 (as written) are accepted. The Phase 0 live checks (traces in Datadog via <code>make dev-collector</code>, read-only keys via <code>make check-datadog</code>, chart start on kind via <code>make dev-up</code>, CI green on <code>main</code>) remain unconfirmed and need the owner's credentials.</i></li>
               <li><code>internal/repository/kubernetes</code>: client-go reader on the reader identity, plus the read-only tools (get, describe, events, pod logs, rollout history) behind the existing <code>tools.Tool</code> interface. <i>Done (slice 1).</i></li>
               <li><code>pkg/redact</code> and untrusted-data framing, before any tool output reaches a model. <i>Done (slice 1).</i></li>
-              <li>Seven KN-5 detectors as pure functions over tool output, each with table tests. Useful without an LLM. <i>Done (slice 1).</i></li>
+              <li>Seven KN-5 detectors as pure functions over tool output, each with table tests, plus a stuck-rollout detector (eight in total). Useful without an LLM. <i>Done (slice 1).</i></li>
               <li>SQLite evidence store with the final Evidence shape (tool, arguments, excerpt, timestamp, hash).</li>
               <li><code>agent-cli diagnose</code> printing detector findings with evidence IDs. This is the first demoable slice and needs no LLM key. <i>Done (slice 1).</i></li>
-              <li>LLM provider interface, Anthropic and one OpenAI-compatible adapter (slice 3); the summary step with call and token caps, rejecting any claim without an evidence ID (INV-2, INV-3).</li>
-              <li>MCP server exposing the same tools (slice 4).</li>
-              <li>Scenarios 1 to 6 under <code>test/scenarios</code> and the <code>test/harness</code> runner, wired into <code>make eval</code> and CI. <i>Slice 2: scored first against the deterministic <code>diagnose</code> output to give a baseline before any model is added. Detector class and root cause are reported separately. <b>Baseline on kind (14 Oct 2026):</b> class accuracy 1.00, top-1 0.83 (5 of 6 scored scenarios), evidence integrity 1.00; <code>badconfig</code> misses the cause because it is only visible in logs, and scenario 6 is skipped (lab only).</i></li>
+              <li>LLM provider interface, Anthropic and one OpenAI-compatible adapter (slice 3); the summary step with call and token caps, rejecting any claim without an evidence ID (INV-2, INV-3). <i>Done (slice 3, PR #5).</i></li>
+              <li>MCP server exposing the same tools (slice 4). <i>Done (slice 4), pending merge.</i></li>
+              <li>Scenarios 1 to 6 under <code>test/scenarios</code> and the <code>test/harness</code> runner, wired into <code>make eval</code> and CI. <i>Slice 2: scored first against the deterministic <code>diagnose</code> output to give a baseline before any model is added. Detector class and root cause are reported separately. <b>Baseline on kind (14 Oct 2026):</b> class accuracy 1.00, top-1 0.83 (5 of 6 scored scenarios), evidence integrity 1.00; <code>badconfig</code> misses the cause because it is only visible in logs, and scenario 6 is skipped (lab only).</i> <i>Pending: the LLM eval run has not been run yet, it spends real API money.</i></li>
             </ol></div>
-            <div class="exit"><h5>Exit criteria</h5>Scenarios 1 to 6 diagnosed correctly (2 of 3 runs, on the reference model); every claim cites evidence.</div>
+            <div class="exit"><h5>Exit criteria</h5>Scenarios 1 to 6 diagnosed correctly (2 of 3 runs, on the reference model); every claim cites evidence. Scenario 6 (disk pressure) is lab-only and reported as skipped on kind, so "scenarios 1 to 6" is scored on the five other scenarios plus the negative <code>healthy</code> scenario on kind.</div>
           </div>
         </div>
         <div class="phase">
@@ -1091,9 +1091,9 @@ dd_monitors  dd_events  change_timeline</code></pre>
     <section id="questions">
       <h2><span class="num">14</span>Open questions</h2>
       <ul>
-        <li>Which provider and models are the reference for evals and defaults, do releases gate only on the reference, and what is the acceptable cost per investigation after the Phase 2 baseline?</li>
-        <li>Build the provider layer in-house (a thin interface and a few adapters) or adopt a Go LLM library? Recommended in ADR 0003 (in-house, proposed); accept it before Phase 1.</li>
-        <li>Phase 1 evidence store: this draft assumes local SQLite with the final Evidence shape and Postgres from Phase 2. Recommended in ADR 0004 (proposed); confirm.</li>
+        <li>Reference model: <code>claude-sonnet-5-5</code> is the reference for evals and defaults (ADR 0003, accepted). Still open: do releases gate only on the reference, and what is the acceptable cost per investigation after the Phase 2 baseline?</li>
+        <li>Build the provider layer in-house (a thin interface and a few adapters) or adopt a Go LLM library? Resolved: in-house, per ADR 0003 (accepted).</li>
+        <li>Phase 1 evidence store: this draft assumes local SQLite with the final Evidence shape and Postgres from Phase 2. Resolved: local SQLite, per ADR 0004 (accepted).</li>
         <li>Should non-GKE clusters (EKS, kind-only users) be a v1 target or community-contributed later?</li>
         <li>How should Slack users map to Kubernetes identities: Google Groups, a static map, or OIDC claims?</li>
         <li>Should every write go through Git, including pod deletes, for a single audit trail?</li>

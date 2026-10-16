@@ -1,6 +1,6 @@
 # ADR 0006: DatadogClient with two backends, API for the service and MCP for the CLI
 
-**Status:** proposed
+**Status:** accepted
 **Date:** 2026-10-11
 
 ## Context
@@ -19,8 +19,6 @@ CI has a separate need: it must not call Datadog. Tests that depend on live
 data are slow, flaky, and cannot run for contributors without an account.
 
 ## Decision
-
-Proposed:
 
 - The agent depends on a `DatadogClient` interface in `internal/repository/datadog`. It
   covers the reads the tools need: metrics, logs, spans, monitors, and events.
