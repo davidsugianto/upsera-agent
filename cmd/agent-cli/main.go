@@ -1,6 +1,7 @@
 // Command agent-cli is the command-line surface for k8s-triage-agent. It
-// reports its version and runs read-only workload diagnoses, optionally adding
-// a model-written summary with --summarize.
+// reports its version, runs read-only workload diagnoses (optionally adding a
+// model-written summary with --summarize), and serves the read-only tools to an
+// MCP client over stdio with the mcp command.
 package main
 
 import (
@@ -46,6 +47,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 0
 	case "diagnose":
 		return runDiagnose(rest[1:], stdout, stderr)
+	case "mcp":
+		return runMCP(rest[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "agent-cli: unknown command %q\n", rest[0])
 		usage(stderr)
@@ -56,5 +59,6 @@ func run(args []string, stdout, stderr io.Writer) int {
 func usage(w io.Writer) {
 	fmt.Fprint(w, "Usage: agent-cli <command>\n\nCommands:\n"+
 		"  diagnose   diagnose a workload: agent-cli diagnose <kind>/<name> -n <namespace> (see diagnose --help)\n"+
+		"  mcp        serve the read-only tools to an MCP client over stdio (see mcp --help)\n"+
 		"  version    print the version\n")
 }
