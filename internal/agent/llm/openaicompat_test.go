@@ -227,6 +227,7 @@ func TestOpenAICompatEmptyOutput(t *testing.T) {
 }
 
 func TestOpenAICompatHTTPErrors(t *testing.T) {
+	stubRetrySleep(t, nil)
 	for _, status := range []int{http.StatusUnauthorized, http.StatusTooManyRequests, http.StatusInternalServerError} {
 		t.Run(http.StatusText(status), func(t *testing.T) {
 			// A misbehaving proxy may echo the credential back.
@@ -413,4 +414,224 @@ func TestOpenAICompatDefaultTokenLimitOnOpenAIHost(t *testing.T) {
 	if got != 2048 {
 		t.Errorf("max_completion_tokens = %d, want 2048", got)
 	}
+}
+
+// stubRetrySleep replaces the retry wait for one test and records each
+// requested duration. A non-nil err is returned from every wait.
+func stubRetrySleep(t *testing.T, err error) *[]time.Duration {
+	t.Helper()
+	var waits []time.Duration
+	old := retrySleep
+	retrySleep = func(_ context.Context, d time.Duration) error {
+		waits = append(waits, d)
+		return err
+	}
+	t.Cleanup(func() { retrySleep = old })
+	return &waits
+}
+
+// rateLimitServer answers the first limited requests with 429 (and the given
+// Retry-After header, if any), then with a normal reply. It records every body.
+func rateLimitServer(t *testing.T, limited int, retryAfter string) (*httptest.Server, *atomic.Int32, *[]string) {
+	t.Helper()
+	var n atomic.Int32
+	var bodies []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		bodies = append(bodies, string(raw))
+		if int(n.Add(1)) <= limited {
+			if retryAfter != "" {
+				w.Header().Set("Retry-After", retryAfter)
+			}
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = io.WriteString(w, `{"error":{"message":"Rate limit reached `+testKey+`"}}`)
+			return
+		}
+		_, _ = io.WriteString(w, okBody)
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &n, &bodies
+}
+
+func TestOpenAICompatRetriesRateLimitThenSucceeds(t *testing.T) {
+	waits := stubRetrySleep(t, nil)
+	srv, n, bodies := rateLimitServer(t, 2, "2")
+	cl := NewOpenAICompat(srv.URL, testKey, nil)
+
+	got, err := cl.Complete(context.Background(), testRequest())
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if got.Text != `{"a":"b"}` {
+		t.Errorf("Text = %q", got.Text)
+	}
+	if n.Load() != 3 {
+		t.Errorf("requests = %d, want 3 (two limited, one served)", n.Load())
+	}
+	if want := []time.Duration{2 * time.Second, 2 * time.Second}; !equalDurations(*waits, want) {
+		t.Errorf("waits = %v, want Retry-After %v", *waits, want)
+	}
+	for i, b := range *bodies {
+		if b != (*bodies)[0] {
+			t.Errorf("attempt %d resent a different body", i+1)
+		}
+	}
+}
+
+func TestOpenAICompatBacksOffWithoutRetryAfter(t *testing.T) {
+	waits := stubRetrySleep(t, nil)
+	srv, n, _ := rateLimitServer(t, 99, "")
+	cl := NewOpenAICompat(srv.URL, testKey, nil)
+
+	_, err := cl.Complete(context.Background(), testRequest())
+	if err == nil {
+		t.Fatal("expected an error after the retries are used up")
+	}
+	if n.Load() != 4 {
+		t.Errorf("requests = %d, want 4 (first try plus 3 retries)", n.Load())
+	}
+	if want := []time.Duration{time.Second, 2 * time.Second, 4 * time.Second}; !equalDurations(*waits, want) {
+		t.Errorf("waits = %v, want exponential %v", *waits, want)
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "429") || !strings.Contains(msg, "3 retries") {
+		t.Errorf("error should name the status and the retries: %v", msg)
+	}
+	if strings.Contains(msg, testKey) {
+		t.Errorf("error leaks the credential: %v", msg)
+	}
+}
+
+func TestOpenAICompatRetryAfterIsValidated(t *testing.T) {
+	for name, tc := range map[string]struct {
+		header string
+		want   time.Duration
+	}{
+		"fractional seconds": {"1.5", 1500 * time.Millisecond},
+		"exactly the cap":    {"30", maxRetryWait},
+		"below the floor":    {"0.01", minRetryWait},
+		"tiny":               {"1e-300", minRetryWait},
+		"zero":               {"0", baseRetryWait},
+		"negative":           {"-5", baseRetryWait},
+		"not a number":       {"soon", baseRetryWait},
+		"nan":                {"NaN", baseRetryWait},
+		"http date":          {"Wed, 21 Oct 2026 07:28:00 GMT", baseRetryWait},
+	} {
+		t.Run(name, func(t *testing.T) {
+			waits := stubRetrySleep(t, nil)
+			srv, _, _ := rateLimitServer(t, 1, tc.header)
+			cl := NewOpenAICompat(srv.URL, testKey, nil)
+			if _, err := cl.Complete(context.Background(), testRequest()); err != nil {
+				t.Fatalf("Complete: %v", err)
+			}
+			if want := []time.Duration{tc.want}; !equalDurations(*waits, want) {
+				t.Errorf("waits = %v, want %v", *waits, want)
+			}
+		})
+	}
+}
+
+// A Retry-After past the cap is a quota problem, not a burst: retrying after a
+// shorter wait would only draw more 429s, so the call fails at once.
+func TestOpenAICompatLongRetryAfterGivesUp(t *testing.T) {
+	for name, header := range map[string]string{
+		"just over the cap": "30.5",
+		"minutes":           "600",
+		"huge":              "1e30",
+		"infinite":          "Inf",
+	} {
+		t.Run(name, func(t *testing.T) {
+			waits := stubRetrySleep(t, nil)
+			srv, n, _ := rateLimitServer(t, 99, header)
+			cl := NewOpenAICompat(srv.URL, testKey, nil)
+
+			_, err := cl.Complete(context.Background(), testRequest())
+			if err == nil {
+				t.Fatal("expected the 429 to be returned")
+			}
+			if n.Load() != 1 || len(*waits) != 0 {
+				t.Errorf("requests = %d, waits = %v; want one request and no wait", n.Load(), *waits)
+			}
+			msg := err.Error()
+			if !strings.Contains(msg, "429") || strings.Contains(msg, testKey) {
+				t.Errorf("error should name the 429 and not leak the key: %v", msg)
+			}
+		})
+	}
+}
+
+// The give-up decision does not depend on the attempt number: a short wait
+// followed by a long one retries once, then returns the 429 with the retry count.
+func TestOpenAICompatLongRetryAfterAfterAShortOneGivesUp(t *testing.T) {
+	waits := stubRetrySleep(t, nil)
+	var n atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if n.Add(1) == 1 {
+			w.Header().Set("Retry-After", "2")
+		} else {
+			w.Header().Set("Retry-After", "600")
+		}
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	t.Cleanup(srv.Close)
+	cl := NewOpenAICompat(srv.URL, testKey, nil)
+
+	_, err := cl.Complete(context.Background(), testRequest())
+	if err == nil {
+		t.Fatal("expected the 429 to be returned")
+	}
+	if n.Load() != 2 || !equalDurations(*waits, []time.Duration{2 * time.Second}) {
+		t.Errorf("requests = %d, waits = %v; want 2 requests and one 2s wait", n.Load(), *waits)
+	}
+	if msg := err.Error(); !strings.Contains(msg, "429") || !strings.Contains(msg, "after 1 retries") {
+		t.Errorf("error should name the 429 and the one retry: %v", msg)
+	}
+}
+
+func TestOpenAICompatOtherErrorsAreNotRetried(t *testing.T) {
+	for _, status := range []int{http.StatusBadRequest, http.StatusUnauthorized, http.StatusInternalServerError, http.StatusServiceUnavailable} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			waits := stubRetrySleep(t, nil)
+			var n atomic.Int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				n.Add(1)
+				w.WriteHeader(status)
+			}))
+			t.Cleanup(srv.Close)
+			cl := NewOpenAICompat(srv.URL, testKey, nil)
+
+			if _, err := cl.Complete(context.Background(), testRequest()); err == nil {
+				t.Fatal("expected an error")
+			}
+			if n.Load() != 1 || len(*waits) != 0 {
+				t.Errorf("requests = %d, waits = %v; want one request and no wait", n.Load(), *waits)
+			}
+		})
+	}
+}
+
+func TestOpenAICompatCancelDuringRetryWaitStops(t *testing.T) {
+	waits := stubRetrySleep(t, context.Canceled)
+	srv, n, _ := rateLimitServer(t, 99, "5")
+	cl := NewOpenAICompat(srv.URL, testKey, nil)
+
+	_, err := cl.Complete(context.Background(), testRequest())
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if n.Load() != 1 || len(*waits) != 1 {
+		t.Errorf("requests = %d, waits = %v; want to stop after the first wait", n.Load(), *waits)
+	}
+}
+
+func equalDurations(a, b []time.Duration) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }

@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -23,6 +25,38 @@ const (
 	maxErrorBodyChars  = 300
 	defaultHTTPTimeout = 120 * time.Second
 )
+
+// A rate-limited call (429) is retried, because a provider's per-minute token
+// limit clears on its own and one throttled call should not fail a whole
+// investigation. Any other failure is returned at once.
+//
+// Retries happen inside one Complete call, so the call budget (Budgeted) counts
+// the logical call once. A throttled attempt normally spends no tokens, and the
+// caller's context bounds the total time.
+const (
+	maxRateLimitRetries = 3
+	baseRetryWait       = time.Second
+	// A server-requested wait shorter than this is raised to it, so a tiny
+	// Retry-After cannot turn the retries into a tight loop.
+	minRetryWait = 100 * time.Millisecond
+	// A server-requested wait longer than this is a quota problem, not a
+	// burst: give up instead of retrying.
+	maxRetryWait = 30 * time.Second
+)
+
+// retrySleep waits between attempts. A variable so tests do not really sleep.
+var retrySleep = sleepCtx
+
+func sleepCtx(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
+}
 
 // openAIHost is the one endpoint that takes max_completion_tokens.
 const openAIHost = "api.openai.com"
@@ -131,29 +165,29 @@ func (c *openAICompat) Complete(ctx context.Context, req Request) (Response, err
 		return Response{}, fmt.Errorf("openai-compat: encode request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(payload))
-	if err != nil {
-		return Response{}, fmt.Errorf("openai-compat: build request: %w", err)
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	if c.apiKey != "" {
-		httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
-	}
-
-	resp, err := c.http.Do(httpReq)
-	if err != nil {
-		return Response{}, fmt.Errorf("openai-compat: send request: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	// One extra byte tells "exactly at the limit" from "over it".
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
-	if err != nil {
-		return Response{}, fmt.Errorf("openai-compat: read response: %w", err)
-	}
-
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return Response{}, fmt.Errorf("openai-compat: %s: %s", resp.Status, errorSnippet(raw))
+	var raw []byte
+	for attempt := 0; ; attempt++ {
+		status, header, body, err := c.post(ctx, payload)
+		if err != nil {
+			return Response{}, err
+		}
+		if status == http.StatusTooManyRequests && attempt < maxRateLimitRetries {
+			if wait, ok := retryWait(header, attempt); ok {
+				if err := retrySleep(ctx, wait); err != nil {
+					return Response{}, fmt.Errorf("openai-compat: waiting to retry after a 429: %w", err)
+				}
+				continue
+			}
+		}
+		if status < 200 || status > 299 {
+			retried := ""
+			if attempt > 0 {
+				retried = fmt.Sprintf(" after %d retries", attempt)
+			}
+			return Response{}, fmt.Errorf("openai-compat: %d %s%s: %s", status, http.StatusText(status), retried, errorSnippet(body))
+		}
+		raw = body
+		break
 	}
 	if len(raw) > maxResponseBytes {
 		return Response{}, fmt.Errorf("openai-compat: response exceeds %d bytes", maxResponseBytes)
@@ -182,6 +216,51 @@ func (c *openAICompat) Complete(ctx context.Context, req Request) (Response, err
 	}
 	got.Text = choice.Message.Content
 	return got, nil
+}
+
+// post sends one attempt and returns the status, headers and a size-bounded
+// body. The request is rebuilt each time because a body reader is single use.
+func (c *openAICompat) post(ctx context.Context, payload []byte) (int, http.Header, []byte, error) {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(payload))
+	if err != nil {
+		return 0, nil, nil, fmt.Errorf("openai-compat: build request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	if c.apiKey != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
+	}
+
+	resp, err := c.http.Do(httpReq)
+	if err != nil {
+		return 0, nil, nil, fmt.Errorf("openai-compat: send request: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	// One extra byte tells "exactly at the limit" from "over it".
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
+	if err != nil {
+		return 0, nil, nil, fmt.Errorf("openai-compat: read response: %w", err)
+	}
+	return resp.StatusCode, resp.Header, raw, nil
+}
+
+// retryWait is how long to wait before retry number attempt+1, and whether to
+// retry at all. A usable Retry-After (seconds, above zero) is obeyed, but one
+// longer than maxRetryWait means a quota rather than a burst, so there is no
+// retry. Without one, back off exponentially from baseRetryWait.
+//
+// The header is compared as a float before any conversion: converting an
+// out-of-range float to a Duration is implementation-defined in Go.
+func retryWait(h http.Header, attempt int) (time.Duration, bool) {
+	secs, err := strconv.ParseFloat(strings.TrimSpace(h.Get("Retry-After")), 64)
+	switch {
+	case err != nil || math.IsNaN(secs) || secs <= 0:
+		return min(baseRetryWait<<attempt, maxRetryWait), true
+	case secs > maxRetryWait.Seconds():
+		return 0, false
+	default:
+		return max(time.Duration(secs*float64(time.Second)), minRetryWait), true
+	}
 }
 
 // errorSnippet redacts before truncating: cutting first could split a secret
